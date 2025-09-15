@@ -1,0 +1,8 @@
+numpy>=1.24
+scipy>=1.10
+matplotlib>=3.8
+pydantic>=2.6
+streamlit>=1.35
+
+# Optional (install manually if you want FDTD):
+# meep>=1.25
