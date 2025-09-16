@@ -4,9 +4,10 @@ from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 from .solver_approx import AnalyticalPatchSolver
+from .solver_fdtd_openems_microstrip import FeedDirection, calculate_microstrip_width
 
 
-def draw_patch_3d_geometry(L_m: float, W_m: float, h_m: float, fig_size=(8, 6)):
+def draw_patch_3d_geometry(L_m: float, W_m: float, h_m: float, fig_size=(8, 6), show_labels: bool = True):
     """Create a detailed 3D visualization of the patch antenna geometry."""
     mm = 1e3
     L = L_m * mm
@@ -21,26 +22,39 @@ def draw_patch_3d_geometry(L_m: float, W_m: float, h_m: float, fig_size=(8, 6)):
     fig = plt.figure(figsize=fig_size)
     ax = fig.add_subplot(111, projection='3d')
     
-    # Substrate (bottom layer)
-    substrate_verts = [
-        [[-sub_L/2, -sub_W/2, -h], [sub_L/2, -sub_W/2, -h], [sub_L/2, sub_W/2, -h], [-sub_L/2, sub_W/2, -h]],  # bottom
-        [[-sub_L/2, -sub_W/2, 0], [sub_L/2, -sub_W/2, 0], [sub_L/2, sub_W/2, 0], [-sub_L/2, sub_W/2, 0]],      # top
-        [[-sub_L/2, -sub_W/2, -h], [-sub_L/2, -sub_W/2, 0], [-sub_L/2, sub_W/2, 0], [-sub_L/2, sub_W/2, -h]], # left
-        [[sub_L/2, -sub_W/2, -h], [sub_L/2, -sub_W/2, 0], [sub_L/2, sub_W/2, 0], [sub_L/2, sub_W/2, -h]],     # right
-        [[-sub_L/2, -sub_W/2, -h], [sub_L/2, -sub_W/2, -h], [sub_L/2, -sub_W/2, 0], [-sub_L/2, -sub_W/2, 0]], # front
-        [[-sub_L/2, sub_W/2, -h], [sub_L/2, sub_W/2, -h], [sub_L/2, sub_W/2, 0], [-sub_L/2, sub_W/2, 0]]      # back
+    # Substrate (sides + bottom only to avoid occluding patch)
+    side_top_z = -0.02  # keep a tiny gap below patch plane so metals always appear on top
+    substrate_side_bottom = [
+        # bottom
+        [[-sub_L/2, -sub_W/2, -h], [sub_L/2, -sub_W/2, -h], [sub_L/2, sub_W/2, -h], [-sub_L/2, sub_W/2, -h]],
+        # left side
+        [[-sub_L/2, -sub_W/2, -h], [-sub_L/2, -sub_W/2, side_top_z], [-sub_L/2, sub_W/2, side_top_z], [-sub_L/2, sub_W/2, -h]],
+        # right side
+        [[sub_L/2, -sub_W/2, -h], [sub_L/2, -sub_W/2, side_top_z], [sub_L/2, sub_W/2, side_top_z], [sub_L/2, sub_W/2, -h]],
+        # front side
+        [[-sub_L/2, -sub_W/2, -h], [sub_L/2, -sub_W/2, -h], [sub_L/2, -sub_W/2, side_top_z], [-sub_L/2, -sub_W/2, side_top_z]],
+        # back side
+        [[-sub_L/2, sub_W/2, -h], [sub_L/2, sub_W/2, -h], [sub_L/2, sub_W/2, side_top_z], [-sub_L/2, sub_W/2, side_top_z]],
     ]
     
-    substrate = Poly3DCollection(substrate_verts, alpha=0.3, facecolor='lightblue', edgecolor='gray')
+    # FR-4 style green substrate (less transparent, neon-ish) - thinner visual block
+    substrate = Poly3DCollection(substrate_side_bottom, alpha=0.78, facecolor='#39ff14', edgecolor='#00a000', linewidth=1.0)
+    try:
+        substrate.set_zsort('min')  # draw behind metals
+    except Exception:
+        pass
+    substrate.set_zorder(1)
     ax.add_collection3d(substrate)
     
     # Ground plane (bottom of substrate)
     ground_verts = [[[-sub_L/2, -sub_W/2, -h], [sub_L/2, -sub_W/2, -h], [sub_L/2, sub_W/2, -h], [-sub_L/2, sub_W/2, -h]]]
-    ground = Poly3DCollection(ground_verts, alpha=0.8, facecolor='silver', edgecolor='black')
+    ground = Poly3DCollection(ground_verts, alpha=0.9, facecolor='#9ea7ad', edgecolor='#6b7074')
+    ground.set_zorder(2)
     ax.add_collection3d(ground)
     
     # Patch (top metal layer)
-    patch_thickness = 0.035  # 35 microns in mm
+    # Keep copper visible but slimmer for a cleaner look
+    patch_thickness = max(0.08, 0.06 * h)  # visual thickness (mm)
     patch_verts = [
         [[-L/2, -W/2, 0], [L/2, -W/2, 0], [L/2, W/2, 0], [-L/2, W/2, 0]],  # bottom
         [[-L/2, -W/2, patch_thickness], [L/2, -W/2, patch_thickness], [L/2, W/2, patch_thickness], [-L/2, W/2, patch_thickness]],  # top
@@ -50,8 +64,35 @@ def draw_patch_3d_geometry(L_m: float, W_m: float, h_m: float, fig_size=(8, 6)):
         [[-L/2, W/2, 0], [L/2, W/2, 0], [L/2, W/2, patch_thickness], [-L/2, W/2, patch_thickness]]      # back
     ]
     
-    patch = Poly3DCollection(patch_verts, alpha=0.9, facecolor='gold', edgecolor='orange')
+    patch = Poly3DCollection(patch_verts, alpha=0.95, facecolor='#ffd24d', edgecolor='#b8860b', linewidth=1.2)
+    try:
+        patch.set_zsort('max')
+    except Exception:
+        pass
+    patch.set_zorder(5)
     ax.add_collection3d(patch)
+
+    # Ensure the very top copper face renders on top in all views (drawn as a separate cap)
+    patch_cap = Poly3DCollection([
+        [[-L/2, -W/2, patch_thickness], [L/2, -W/2, patch_thickness], [L/2, W/2, patch_thickness], [-L/2, W/2, patch_thickness]]
+    ], alpha=0.98, facecolor='#ffd24d', edgecolor='#b8860b', linewidth=1.0)
+    try:
+        patch_cap.set_zsort('max')
+    except Exception:
+        pass
+    patch_cap.set_zorder(9)
+    ax.add_collection3d(patch_cap)
+    # Ensure patch appears visually above substrate sides
+    try:
+        for coll in ax.collections:
+            if coll is substrate:
+                coll.set_zorder(1)
+            if coll is ground:
+                coll.set_zorder(2)
+            if coll is patch:
+                coll.set_zorder(5)
+    except Exception:
+        pass
     
     # Feed point (small cylinder at edge)
     feed_x = -L/2
@@ -66,10 +107,15 @@ def draw_patch_3d_geometry(L_m: float, W_m: float, h_m: float, fig_size=(8, 6)):
         z_circle = np.full_like(theta, feed_z[i])
         ax.plot(x_circle, y_circle, z_circle, color='red', alpha=0.7, linewidth=1)
     
-    # Dimension annotations
-    ax.text(0, -W/2-margin/3, patch_thickness*2, f'L = {L:.1f} mm', ha='center', fontsize=10)
-    ax.text(L/2+margin/4, 0, patch_thickness*2, f'W = {W:.1f} mm', ha='center', rotation=90, fontsize=10)
-    ax.text(-sub_L/2-margin/4, 0, -h/2, f'h = {h:.2f} mm', ha='center', rotation=90, fontsize=10)
+    # Dimension annotations (high contrast)
+    label_box = dict(boxstyle='round,pad=0.3', fc='black', ec='none', alpha=0.6)
+    if show_labels:
+        ax.text(0, -W/2-0.9*margin, patch_thickness*1.2, f'L = {L:.1f} mm', ha='center', fontsize=13, color='white', bbox=label_box)
+        ax.text(L/2+0.9*margin, 0, patch_thickness*1.2, f'W = {W:.1f} mm', ha='center', rotation=90, fontsize=13, color='white', bbox=label_box)
+    # Thickness indicator near front-left corner
+    xh, yh = -sub_L/2 + 0.15*sub_L, -sub_W/2 + 0.15*sub_W
+    ax.plot([xh, xh], [yh, yh], [-h, 0], color='#ff7043', linewidth=2.0)
+    ax.text(xh, yh, -h*0.5, f'h = {h:.2f} mm', color='white', fontsize=13, bbox=label_box, ha='center')
     
     # Coordinate axes
     max_dim = max(sub_L, sub_W) / 2
@@ -94,6 +140,126 @@ def draw_patch_3d_geometry(L_m: float, W_m: float, h_m: float, fig_size=(8, 6)):
     
     # Better viewing angle
     ax.view_init(elev=20, azim=45)
+    
+    return fig
+
+
+def draw_microstrip_patch_3d_geometry(L_m: float, W_m: float, h_m: float, 
+                                       feed_direction: FeedDirection,
+                                       frequency_hz: float, eps_r: float,
+                                       feed_line_length_mm: float = 20.0,
+                                       fig_size=(8, 6)):
+    """Create a detailed 3D visualization of the microstrip-fed patch antenna geometry."""
+    mm = 1e3
+    L = L_m * mm  # patch length (Y direction)
+    W = W_m * mm  # patch width (X direction)
+    h = h_m * mm  # substrate thickness
+    
+    # Calculate microstrip feed line width for 50Ω
+    feed_width = calculate_microstrip_width(frequency_hz, eps_r, h_m) * mm
+    
+    # Substrate dimensions (larger than patch + feed)
+    substrate_margin = 30.0  # mm
+    if feed_direction in [FeedDirection.NEG_X, FeedDirection.POS_X]:
+        substrate_W = W + 2 * substrate_margin + feed_line_length_mm
+        substrate_L = L + 2 * substrate_margin
+    else:
+        substrate_W = W + 2 * substrate_margin
+        substrate_L = L + 2 * substrate_margin + feed_line_length_mm
+    
+    fig = plt.figure(figsize=fig_size)
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # Substrate (bottom layer)
+    substrate_verts = [
+        [[-substrate_W/2, -substrate_L/2, -h], [substrate_W/2, -substrate_L/2, -h], [substrate_W/2, substrate_L/2, -h], [-substrate_W/2, substrate_L/2, -h]],  # bottom
+        [[-substrate_W/2, -substrate_L/2, 0], [substrate_W/2, -substrate_L/2, 0], [substrate_W/2, substrate_L/2, 0], [-substrate_W/2, substrate_L/2, 0]],      # top
+        [[-substrate_W/2, -substrate_L/2, -h], [-substrate_W/2, -substrate_L/2, 0], [-substrate_W/2, substrate_L/2, 0], [-substrate_W/2, substrate_L/2, -h]], # left
+        [[substrate_W/2, -substrate_L/2, -h], [substrate_W/2, -substrate_L/2, 0], [substrate_W/2, substrate_L/2, 0], [substrate_W/2, substrate_L/2, -h]],     # right
+        [[-substrate_W/2, -substrate_L/2, -h], [substrate_W/2, -substrate_L/2, -h], [substrate_W/2, -substrate_L/2, 0], [-substrate_W/2, -substrate_L/2, 0]], # front
+        [[-substrate_W/2, substrate_L/2, -h], [substrate_W/2, substrate_L/2, -h], [substrate_W/2, substrate_L/2, 0], [-substrate_W/2, substrate_L/2, 0]]      # back
+    ]
+    
+    substrate = Poly3DCollection(substrate_verts, alpha=0.3, facecolor='lightblue', edgecolor='gray')
+    ax.add_collection3d(substrate)
+    
+    # Ground plane (bottom of substrate)
+    ground_verts = [[[-substrate_W/2, -substrate_L/2, -h], [substrate_W/2, -substrate_L/2, -h], [substrate_W/2, substrate_L/2, -h], [-substrate_W/2, substrate_L/2, -h]]]
+    ground = Poly3DCollection(ground_verts, alpha=0.8, facecolor='silver', edgecolor='black')
+    ax.add_collection3d(ground)
+    
+    # Patch (top metal layer)
+    patch_thickness = 0.035  # 35 microns in mm
+    patch_verts = [
+        [[-W/2, -L/2, 0], [W/2, -L/2, 0], [W/2, L/2, 0], [-W/2, L/2, 0]],  # bottom
+        [[-W/2, -L/2, patch_thickness], [W/2, -L/2, patch_thickness], [W/2, L/2, patch_thickness], [-W/2, L/2, patch_thickness]],  # top
+        [[-W/2, -L/2, 0], [-W/2, -L/2, patch_thickness], [-W/2, L/2, patch_thickness], [-W/2, L/2, 0]], # left
+        [[W/2, -L/2, 0], [W/2, -L/2, patch_thickness], [W/2, L/2, patch_thickness], [W/2, L/2, 0]],     # right
+        [[-W/2, -L/2, 0], [W/2, -L/2, 0], [W/2, -L/2, patch_thickness], [-W/2, -L/2, patch_thickness]], # front
+        [[-W/2, L/2, 0], [W/2, L/2, 0], [W/2, L/2, patch_thickness], [-W/2, L/2, patch_thickness]]      # back
+    ]
+    
+    patch = Poly3DCollection(patch_verts, alpha=0.9, facecolor='gold', edgecolor='black')
+    ax.add_collection3d(patch)
+    
+    # Microstrip feed line (based on feed direction)
+    if feed_direction == FeedDirection.NEG_X:
+        # Feed from negative X direction
+        feed_start_x = -substrate_W/2
+        feed_stop_x = -W/2
+        feed_start_y = -feed_width/2
+        feed_stop_y = feed_width/2
+    elif feed_direction == FeedDirection.POS_X:
+        # Feed from positive X direction
+        feed_start_x = W/2
+        feed_stop_x = substrate_W/2
+        feed_start_y = -feed_width/2
+        feed_stop_y = feed_width/2
+    elif feed_direction == FeedDirection.NEG_Y:
+        # Feed from negative Y direction
+        feed_start_x = -feed_width/2
+        feed_stop_x = feed_width/2
+        feed_start_y = -substrate_L/2
+        feed_stop_y = -L/2
+    else:  # FeedDirection.POS_Y
+        # Feed from positive Y direction
+        feed_start_x = -feed_width/2
+        feed_stop_x = feed_width/2
+        feed_start_y = L/2
+        feed_stop_y = substrate_L/2
+    
+    # Create microstrip feed line
+    feed_verts = [
+        [[feed_start_x, feed_start_y, 0], [feed_stop_x, feed_start_y, 0], [feed_stop_x, feed_stop_y, 0], [feed_start_x, feed_stop_y, 0]],  # bottom
+        [[feed_start_x, feed_start_y, patch_thickness], [feed_stop_x, feed_start_y, patch_thickness], [feed_stop_x, feed_stop_y, patch_thickness], [feed_start_x, feed_stop_y, patch_thickness]],  # top
+    ]
+    
+    feed_line = Poly3DCollection(feed_verts, alpha=0.9, facecolor='orange', edgecolor='black')
+    ax.add_collection3d(feed_line)
+    
+    # Set equal aspect ratio and limits
+    max_range = max(substrate_W, substrate_L, h*10) / 2
+    ax.set_xlim([-max_range, max_range])
+    ax.set_ylim([-max_range, max_range])
+    ax.set_zlim([-h*2, h*8])
+    
+    # Labels and styling
+    ax.set_xlabel('X (mm)')
+    ax.set_ylabel('Y (mm)')
+    ax.set_zlabel('Z (mm)')
+    ax.set_title(f'Microstrip-Fed Patch Antenna\nFeed: {feed_direction.value}, Line Width: {feed_width:.2f} mm')
+    
+    # Add dimension annotations
+    ax.text(0, 0, h*4, f'{W:.1f} mm', ha='center', va='center', color='red', fontweight='bold')
+    ax.text(0, 0, h*6, f'{L:.1f} mm', ha='center', va='center', color='green', fontweight='bold')
+    
+    # Add feed line annotation
+    if feed_direction in [FeedDirection.NEG_X, FeedDirection.POS_X]:
+        feed_center_x = (feed_start_x + feed_stop_x) / 2
+        ax.text(feed_center_x, 0, h*2, f'Feed: {feed_width:.1f} mm', ha='center', va='center', color='orange', fontweight='bold')
+    else:
+        feed_center_y = (feed_start_y + feed_stop_y) / 2
+        ax.text(0, feed_center_y, h*2, f'Feed: {feed_width:.1f} mm', ha='center', va='center', color='orange', fontweight='bold')
     
     return fig
 
@@ -180,6 +346,126 @@ def plot_cross_sections(solver: AnalyticalPatchSolver, *, fig_size=(12, 6)):
     return fig
 
 
+def draw_microstrip_patch_3d_geometry(L_m: float, W_m: float, h_m: float, 
+                                       feed_direction: FeedDirection,
+                                       frequency_hz: float, eps_r: float,
+                                       feed_line_length_mm: float = 20.0,
+                                       fig_size=(8, 6)):
+    """Create a detailed 3D visualization of the microstrip-fed patch antenna geometry."""
+    mm = 1e3
+    L = L_m * mm  # patch length (Y direction)
+    W = W_m * mm  # patch width (X direction)
+    h = h_m * mm  # substrate thickness
+    
+    # Calculate microstrip feed line width for 50Ω
+    feed_width = calculate_microstrip_width(frequency_hz, eps_r, h_m) * mm
+    
+    # Substrate dimensions (larger than patch + feed)
+    substrate_margin = 30.0  # mm
+    if feed_direction in [FeedDirection.NEG_X, FeedDirection.POS_X]:
+        substrate_W = W + 2 * substrate_margin + feed_line_length_mm
+        substrate_L = L + 2 * substrate_margin
+    else:
+        substrate_W = W + 2 * substrate_margin
+        substrate_L = L + 2 * substrate_margin + feed_line_length_mm
+    
+    fig = plt.figure(figsize=fig_size)
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # Substrate (bottom layer)
+    substrate_verts = [
+        [[-substrate_W/2, -substrate_L/2, -h], [substrate_W/2, -substrate_L/2, -h], [substrate_W/2, substrate_L/2, -h], [-substrate_W/2, substrate_L/2, -h]],  # bottom
+        [[-substrate_W/2, -substrate_L/2, 0], [substrate_W/2, -substrate_L/2, 0], [substrate_W/2, substrate_L/2, 0], [-substrate_W/2, substrate_L/2, 0]],      # top
+        [[-substrate_W/2, -substrate_L/2, -h], [-substrate_W/2, -substrate_L/2, 0], [-substrate_W/2, substrate_L/2, 0], [-substrate_W/2, substrate_L/2, -h]], # left
+        [[substrate_W/2, -substrate_L/2, -h], [substrate_W/2, -substrate_L/2, 0], [substrate_W/2, substrate_L/2, 0], [substrate_W/2, substrate_L/2, -h]],     # right
+        [[-substrate_W/2, -substrate_L/2, -h], [substrate_W/2, -substrate_L/2, -h], [substrate_W/2, -substrate_L/2, 0], [-substrate_W/2, -substrate_L/2, 0]], # front
+        [[-substrate_W/2, substrate_L/2, -h], [substrate_W/2, substrate_L/2, -h], [substrate_W/2, substrate_L/2, 0], [-substrate_W/2, substrate_L/2, 0]]      # back
+    ]
+    
+    substrate = Poly3DCollection(substrate_verts, alpha=0.3, facecolor='lightblue', edgecolor='gray')
+    ax.add_collection3d(substrate)
+    
+    # Ground plane (bottom of substrate)
+    ground_verts = [[[-substrate_W/2, -substrate_L/2, -h], [substrate_W/2, -substrate_L/2, -h], [substrate_W/2, substrate_L/2, -h], [-substrate_W/2, substrate_L/2, -h]]]
+    ground = Poly3DCollection(ground_verts, alpha=0.8, facecolor='silver', edgecolor='black')
+    ax.add_collection3d(ground)
+    
+    # Patch (top metal layer)
+    patch_thickness = 0.035  # 35 microns in mm
+    patch_verts = [
+        [[-W/2, -L/2, 0], [W/2, -L/2, 0], [W/2, L/2, 0], [-W/2, L/2, 0]],  # bottom
+        [[-W/2, -L/2, patch_thickness], [W/2, -L/2, patch_thickness], [W/2, L/2, patch_thickness], [-W/2, L/2, patch_thickness]],  # top
+        [[-W/2, -L/2, 0], [-W/2, -L/2, patch_thickness], [-W/2, L/2, patch_thickness], [-W/2, L/2, 0]], # left
+        [[W/2, -L/2, 0], [W/2, -L/2, patch_thickness], [W/2, L/2, patch_thickness], [W/2, L/2, 0]],     # right
+        [[-W/2, -L/2, 0], [W/2, -L/2, 0], [W/2, -L/2, patch_thickness], [-W/2, -L/2, patch_thickness]], # front
+        [[-W/2, L/2, 0], [W/2, L/2, 0], [W/2, L/2, patch_thickness], [-W/2, L/2, patch_thickness]]      # back
+    ]
+    
+    patch = Poly3DCollection(patch_verts, alpha=0.9, facecolor='gold', edgecolor='black')
+    ax.add_collection3d(patch)
+    
+    # Microstrip feed line (based on feed direction)
+    if feed_direction == FeedDirection.NEG_X:
+        # Feed from negative X direction
+        feed_start_x = -substrate_W/2
+        feed_stop_x = -W/2
+        feed_start_y = -feed_width/2
+        feed_stop_y = feed_width/2
+    elif feed_direction == FeedDirection.POS_X:
+        # Feed from positive X direction
+        feed_start_x = W/2
+        feed_stop_x = substrate_W/2
+        feed_start_y = -feed_width/2
+        feed_stop_y = feed_width/2
+    elif feed_direction == FeedDirection.NEG_Y:
+        # Feed from negative Y direction
+        feed_start_x = -feed_width/2
+        feed_stop_x = feed_width/2
+        feed_start_y = -substrate_L/2
+        feed_stop_y = -L/2
+    else:  # FeedDirection.POS_Y
+        # Feed from positive Y direction
+        feed_start_x = -feed_width/2
+        feed_stop_x = feed_width/2
+        feed_start_y = L/2
+        feed_stop_y = substrate_L/2
+    
+    # Create microstrip feed line
+    feed_verts = [
+        [[feed_start_x, feed_start_y, 0], [feed_stop_x, feed_start_y, 0], [feed_stop_x, feed_stop_y, 0], [feed_start_x, feed_stop_y, 0]],  # bottom
+        [[feed_start_x, feed_start_y, patch_thickness], [feed_stop_x, feed_start_y, patch_thickness], [feed_stop_x, feed_stop_y, patch_thickness], [feed_start_x, feed_stop_y, patch_thickness]],  # top
+    ]
+    
+    feed_line = Poly3DCollection(feed_verts, alpha=0.9, facecolor='orange', edgecolor='black')
+    ax.add_collection3d(feed_line)
+    
+    # Set equal aspect ratio and limits
+    max_range = max(substrate_W, substrate_L, h*10) / 2
+    ax.set_xlim([-max_range, max_range])
+    ax.set_ylim([-max_range, max_range])
+    ax.set_zlim([-h*2, h*8])
+    
+    # Labels and styling
+    ax.set_xlabel('X (mm)')
+    ax.set_ylabel('Y (mm)')
+    ax.set_zlabel('Z (mm)')
+    ax.set_title(f'Microstrip-Fed Patch Antenna\nFeed: {feed_direction.value}, Line Width: {feed_width:.2f} mm')
+    
+    # Add dimension annotations
+    ax.text(0, 0, h*4, f'{W:.1f} mm', ha='center', va='center', color='red', fontweight='bold')
+    ax.text(0, 0, h*6, f'{L:.1f} mm', ha='center', va='center', color='green', fontweight='bold')
+    
+    # Add feed line annotation
+    if feed_direction in [FeedDirection.NEG_X, FeedDirection.POS_X]:
+        feed_center_x = (feed_start_x + feed_stop_x) / 2
+        ax.text(feed_center_x, 0, h*2, f'Feed: {feed_width:.1f} mm', ha='center', va='center', color='orange', fontweight='bold')
+    else:
+        feed_center_y = (feed_start_y + feed_stop_y) / 2
+        ax.text(0, feed_center_y, h*2, f'Feed: {feed_width:.1f} mm', ha='center', va='center', color='orange', fontweight='bold')
+    
+    return fig
+
+
 def _spherical_to_cart(r: np.ndarray, th: np.ndarray, ph: np.ndarray):
     x = r * np.sin(th) * np.cos(ph)
     y = r * np.sin(th) * np.sin(ph)
@@ -240,6 +526,126 @@ def plot_3d_pattern(solver: AnalyticalPatchSolver, *, show_isotropic: bool = Tru
 
     ax.set_title("3D radiation surface (normalized)\nColor = intensity, transparent sphere = isotropic")
     ax.view_init(elev=22, azim=35)
+    return fig
+
+
+def draw_microstrip_patch_3d_geometry(L_m: float, W_m: float, h_m: float, 
+                                       feed_direction: FeedDirection,
+                                       frequency_hz: float, eps_r: float,
+                                       feed_line_length_mm: float = 20.0,
+                                       fig_size=(8, 6)):
+    """Create a detailed 3D visualization of the microstrip-fed patch antenna geometry."""
+    mm = 1e3
+    L = L_m * mm  # patch length (Y direction)
+    W = W_m * mm  # patch width (X direction)
+    h = h_m * mm  # substrate thickness
+    
+    # Calculate microstrip feed line width for 50Ω
+    feed_width = calculate_microstrip_width(frequency_hz, eps_r, h_m) * mm
+    
+    # Substrate dimensions (larger than patch + feed)
+    substrate_margin = 30.0  # mm
+    if feed_direction in [FeedDirection.NEG_X, FeedDirection.POS_X]:
+        substrate_W = W + 2 * substrate_margin + feed_line_length_mm
+        substrate_L = L + 2 * substrate_margin
+    else:
+        substrate_W = W + 2 * substrate_margin
+        substrate_L = L + 2 * substrate_margin + feed_line_length_mm
+    
+    fig = plt.figure(figsize=fig_size)
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # Substrate (bottom layer)
+    substrate_verts = [
+        [[-substrate_W/2, -substrate_L/2, -h], [substrate_W/2, -substrate_L/2, -h], [substrate_W/2, substrate_L/2, -h], [-substrate_W/2, substrate_L/2, -h]],  # bottom
+        [[-substrate_W/2, -substrate_L/2, 0], [substrate_W/2, -substrate_L/2, 0], [substrate_W/2, substrate_L/2, 0], [-substrate_W/2, substrate_L/2, 0]],      # top
+        [[-substrate_W/2, -substrate_L/2, -h], [-substrate_W/2, -substrate_L/2, 0], [-substrate_W/2, substrate_L/2, 0], [-substrate_W/2, substrate_L/2, -h]], # left
+        [[substrate_W/2, -substrate_L/2, -h], [substrate_W/2, -substrate_L/2, 0], [substrate_W/2, substrate_L/2, 0], [substrate_W/2, substrate_L/2, -h]],     # right
+        [[-substrate_W/2, -substrate_L/2, -h], [substrate_W/2, -substrate_L/2, -h], [substrate_W/2, -substrate_L/2, 0], [-substrate_W/2, -substrate_L/2, 0]], # front
+        [[-substrate_W/2, substrate_L/2, -h], [substrate_W/2, substrate_L/2, -h], [substrate_W/2, substrate_L/2, 0], [-substrate_W/2, substrate_L/2, 0]]      # back
+    ]
+    
+    substrate = Poly3DCollection(substrate_verts, alpha=0.3, facecolor='lightblue', edgecolor='gray')
+    ax.add_collection3d(substrate)
+    
+    # Ground plane (bottom of substrate)
+    ground_verts = [[[-substrate_W/2, -substrate_L/2, -h], [substrate_W/2, -substrate_L/2, -h], [substrate_W/2, substrate_L/2, -h], [-substrate_W/2, substrate_L/2, -h]]]
+    ground = Poly3DCollection(ground_verts, alpha=0.8, facecolor='silver', edgecolor='black')
+    ax.add_collection3d(ground)
+    
+    # Patch (top metal layer)
+    patch_thickness = 0.035  # 35 microns in mm
+    patch_verts = [
+        [[-W/2, -L/2, 0], [W/2, -L/2, 0], [W/2, L/2, 0], [-W/2, L/2, 0]],  # bottom
+        [[-W/2, -L/2, patch_thickness], [W/2, -L/2, patch_thickness], [W/2, L/2, patch_thickness], [-W/2, L/2, patch_thickness]],  # top
+        [[-W/2, -L/2, 0], [-W/2, -L/2, patch_thickness], [-W/2, L/2, patch_thickness], [-W/2, L/2, 0]], # left
+        [[W/2, -L/2, 0], [W/2, -L/2, patch_thickness], [W/2, L/2, patch_thickness], [W/2, L/2, 0]],     # right
+        [[-W/2, -L/2, 0], [W/2, -L/2, 0], [W/2, -L/2, patch_thickness], [-W/2, -L/2, patch_thickness]], # front
+        [[-W/2, L/2, 0], [W/2, L/2, 0], [W/2, L/2, patch_thickness], [-W/2, L/2, patch_thickness]]      # back
+    ]
+    
+    patch = Poly3DCollection(patch_verts, alpha=0.9, facecolor='gold', edgecolor='black')
+    ax.add_collection3d(patch)
+    
+    # Microstrip feed line (based on feed direction)
+    if feed_direction == FeedDirection.NEG_X:
+        # Feed from negative X direction
+        feed_start_x = -substrate_W/2
+        feed_stop_x = -W/2
+        feed_start_y = -feed_width/2
+        feed_stop_y = feed_width/2
+    elif feed_direction == FeedDirection.POS_X:
+        # Feed from positive X direction
+        feed_start_x = W/2
+        feed_stop_x = substrate_W/2
+        feed_start_y = -feed_width/2
+        feed_stop_y = feed_width/2
+    elif feed_direction == FeedDirection.NEG_Y:
+        # Feed from negative Y direction
+        feed_start_x = -feed_width/2
+        feed_stop_x = feed_width/2
+        feed_start_y = -substrate_L/2
+        feed_stop_y = -L/2
+    else:  # FeedDirection.POS_Y
+        # Feed from positive Y direction
+        feed_start_x = -feed_width/2
+        feed_stop_x = feed_width/2
+        feed_start_y = L/2
+        feed_stop_y = substrate_L/2
+    
+    # Create microstrip feed line
+    feed_verts = [
+        [[feed_start_x, feed_start_y, 0], [feed_stop_x, feed_start_y, 0], [feed_stop_x, feed_stop_y, 0], [feed_start_x, feed_stop_y, 0]],  # bottom
+        [[feed_start_x, feed_start_y, patch_thickness], [feed_stop_x, feed_start_y, patch_thickness], [feed_stop_x, feed_stop_y, patch_thickness], [feed_start_x, feed_stop_y, patch_thickness]],  # top
+    ]
+    
+    feed_line = Poly3DCollection(feed_verts, alpha=0.9, facecolor='orange', edgecolor='black')
+    ax.add_collection3d(feed_line)
+    
+    # Set equal aspect ratio and limits
+    max_range = max(substrate_W, substrate_L, h*10) / 2
+    ax.set_xlim([-max_range, max_range])
+    ax.set_ylim([-max_range, max_range])
+    ax.set_zlim([-h*2, h*8])
+    
+    # Labels and styling
+    ax.set_xlabel('X (mm)')
+    ax.set_ylabel('Y (mm)')
+    ax.set_zlabel('Z (mm)')
+    ax.set_title(f'Microstrip-Fed Patch Antenna\nFeed: {feed_direction.value}, Line Width: {feed_width:.2f} mm')
+    
+    # Add dimension annotations
+    ax.text(0, 0, h*4, f'{W:.1f} mm', ha='center', va='center', color='red', fontweight='bold')
+    ax.text(0, 0, h*6, f'{L:.1f} mm', ha='center', va='center', color='green', fontweight='bold')
+    
+    # Add feed line annotation
+    if feed_direction in [FeedDirection.NEG_X, FeedDirection.POS_X]:
+        feed_center_x = (feed_start_x + feed_stop_x) / 2
+        ax.text(feed_center_x, 0, h*2, f'Feed: {feed_width:.1f} mm', ha='center', va='center', color='orange', fontweight='bold')
+    else:
+        feed_center_y = (feed_start_y + feed_stop_y) / 2
+        ax.text(0, feed_center_y, h*2, f'Feed: {feed_width:.1f} mm', ha='center', va='center', color='orange', fontweight='bold')
+    
     return fig
 
 
@@ -430,5 +836,125 @@ def plot_3d_pattern_from_grid(theta: np.ndarray,
     ax.xaxis.pane.set_alpha(0.1)
     ax.yaxis.pane.set_alpha(0.1)
     ax.zaxis.pane.set_alpha(0.1)
+    
+    return fig
+
+
+def draw_microstrip_patch_3d_geometry(L_m: float, W_m: float, h_m: float, 
+                                       feed_direction: FeedDirection,
+                                       frequency_hz: float, eps_r: float,
+                                       feed_line_length_mm: float = 20.0,
+                                       fig_size=(8, 6)):
+    """Create a detailed 3D visualization of the microstrip-fed patch antenna geometry."""
+    mm = 1e3
+    L = L_m * mm  # patch length (Y direction)
+    W = W_m * mm  # patch width (X direction)
+    h = h_m * mm  # substrate thickness
+    
+    # Calculate microstrip feed line width for 50Ω
+    feed_width = calculate_microstrip_width(frequency_hz, eps_r, h_m) * mm
+    
+    # Substrate dimensions (larger than patch + feed)
+    substrate_margin = 30.0  # mm
+    if feed_direction in [FeedDirection.NEG_X, FeedDirection.POS_X]:
+        substrate_W = W + 2 * substrate_margin + feed_line_length_mm
+        substrate_L = L + 2 * substrate_margin
+    else:
+        substrate_W = W + 2 * substrate_margin
+        substrate_L = L + 2 * substrate_margin + feed_line_length_mm
+    
+    fig = plt.figure(figsize=fig_size)
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # Substrate (bottom layer)
+    substrate_verts = [
+        [[-substrate_W/2, -substrate_L/2, -h], [substrate_W/2, -substrate_L/2, -h], [substrate_W/2, substrate_L/2, -h], [-substrate_W/2, substrate_L/2, -h]],  # bottom
+        [[-substrate_W/2, -substrate_L/2, 0], [substrate_W/2, -substrate_L/2, 0], [substrate_W/2, substrate_L/2, 0], [-substrate_W/2, substrate_L/2, 0]],      # top
+        [[-substrate_W/2, -substrate_L/2, -h], [-substrate_W/2, -substrate_L/2, 0], [-substrate_W/2, substrate_L/2, 0], [-substrate_W/2, substrate_L/2, -h]], # left
+        [[substrate_W/2, -substrate_L/2, -h], [substrate_W/2, -substrate_L/2, 0], [substrate_W/2, substrate_L/2, 0], [substrate_W/2, substrate_L/2, -h]],     # right
+        [[-substrate_W/2, -substrate_L/2, -h], [substrate_W/2, -substrate_L/2, -h], [substrate_W/2, -substrate_L/2, 0], [-substrate_W/2, -substrate_L/2, 0]], # front
+        [[-substrate_W/2, substrate_L/2, -h], [substrate_W/2, substrate_L/2, -h], [substrate_W/2, substrate_L/2, 0], [-substrate_W/2, substrate_L/2, 0]]      # back
+    ]
+    
+    substrate = Poly3DCollection(substrate_verts, alpha=0.3, facecolor='lightblue', edgecolor='gray')
+    ax.add_collection3d(substrate)
+    
+    # Ground plane (bottom of substrate)
+    ground_verts = [[[-substrate_W/2, -substrate_L/2, -h], [substrate_W/2, -substrate_L/2, -h], [substrate_W/2, substrate_L/2, -h], [-substrate_W/2, substrate_L/2, -h]]]
+    ground = Poly3DCollection(ground_verts, alpha=0.8, facecolor='silver', edgecolor='black')
+    ax.add_collection3d(ground)
+    
+    # Patch (top metal layer)
+    patch_thickness = 0.035  # 35 microns in mm
+    patch_verts = [
+        [[-W/2, -L/2, 0], [W/2, -L/2, 0], [W/2, L/2, 0], [-W/2, L/2, 0]],  # bottom
+        [[-W/2, -L/2, patch_thickness], [W/2, -L/2, patch_thickness], [W/2, L/2, patch_thickness], [-W/2, L/2, patch_thickness]],  # top
+        [[-W/2, -L/2, 0], [-W/2, -L/2, patch_thickness], [-W/2, L/2, patch_thickness], [-W/2, L/2, 0]], # left
+        [[W/2, -L/2, 0], [W/2, -L/2, patch_thickness], [W/2, L/2, patch_thickness], [W/2, L/2, 0]],     # right
+        [[-W/2, -L/2, 0], [W/2, -L/2, 0], [W/2, -L/2, patch_thickness], [-W/2, -L/2, patch_thickness]], # front
+        [[-W/2, L/2, 0], [W/2, L/2, 0], [W/2, L/2, patch_thickness], [-W/2, L/2, patch_thickness]]      # back
+    ]
+    
+    patch = Poly3DCollection(patch_verts, alpha=0.9, facecolor='gold', edgecolor='black')
+    ax.add_collection3d(patch)
+    
+    # Microstrip feed line (based on feed direction)
+    if feed_direction == FeedDirection.NEG_X:
+        # Feed from negative X direction
+        feed_start_x = -substrate_W/2
+        feed_stop_x = -W/2
+        feed_start_y = -feed_width/2
+        feed_stop_y = feed_width/2
+    elif feed_direction == FeedDirection.POS_X:
+        # Feed from positive X direction
+        feed_start_x = W/2
+        feed_stop_x = substrate_W/2
+        feed_start_y = -feed_width/2
+        feed_stop_y = feed_width/2
+    elif feed_direction == FeedDirection.NEG_Y:
+        # Feed from negative Y direction
+        feed_start_x = -feed_width/2
+        feed_stop_x = feed_width/2
+        feed_start_y = -substrate_L/2
+        feed_stop_y = -L/2
+    else:  # FeedDirection.POS_Y
+        # Feed from positive Y direction
+        feed_start_x = -feed_width/2
+        feed_stop_x = feed_width/2
+        feed_start_y = L/2
+        feed_stop_y = substrate_L/2
+    
+    # Create microstrip feed line
+    feed_verts = [
+        [[feed_start_x, feed_start_y, 0], [feed_stop_x, feed_start_y, 0], [feed_stop_x, feed_stop_y, 0], [feed_start_x, feed_stop_y, 0]],  # bottom
+        [[feed_start_x, feed_start_y, patch_thickness], [feed_stop_x, feed_start_y, patch_thickness], [feed_stop_x, feed_stop_y, patch_thickness], [feed_start_x, feed_stop_y, patch_thickness]],  # top
+    ]
+    
+    feed_line = Poly3DCollection(feed_verts, alpha=0.9, facecolor='orange', edgecolor='black')
+    ax.add_collection3d(feed_line)
+    
+    # Set equal aspect ratio and limits
+    max_range = max(substrate_W, substrate_L, h*10) / 2
+    ax.set_xlim([-max_range, max_range])
+    ax.set_ylim([-max_range, max_range])
+    ax.set_zlim([-h*2, h*8])
+    
+    # Labels and styling
+    ax.set_xlabel('X (mm)')
+    ax.set_ylabel('Y (mm)')
+    ax.set_zlabel('Z (mm)')
+    ax.set_title(f'Microstrip-Fed Patch Antenna\nFeed: {feed_direction.value}, Line Width: {feed_width:.2f} mm')
+    
+    # Add dimension annotations
+    ax.text(0, 0, h*4, f'{W:.1f} mm', ha='center', va='center', color='red', fontweight='bold')
+    ax.text(0, 0, h*6, f'{L:.1f} mm', ha='center', va='center', color='green', fontweight='bold')
+    
+    # Add feed line annotation
+    if feed_direction in [FeedDirection.NEG_X, FeedDirection.POS_X]:
+        feed_center_x = (feed_start_x + feed_stop_x) / 2
+        ax.text(feed_center_x, 0, h*2, f'Feed: {feed_width:.1f} mm', ha='center', va='center', color='orange', fontweight='bold')
+    else:
+        feed_center_y = (feed_start_y + feed_stop_y) / 2
+        ax.text(0, feed_center_y, h*2, f'Feed: {feed_width:.1f} mm', ha='center', va='center', color='orange', fontweight='bold')
     
     return fig

@@ -11,6 +11,15 @@ from .solver_fdtd_openems_fixed import (
     OpenEMSResult,
     OpenEMSPrepared,
 )
+
+# Import microstrip solver
+from .solver_fdtd_openems_microstrip import (
+    probe_openems_microstrip,
+    prepare_openems_microstrip_patch,
+    run_prepared_openems_microstrip,
+    FeedDirection,
+    calculate_microstrip_width,
+)
 # 2D solver removed - 3D solver provides E-plane/H-plane cuts automatically
 
 __all__ = [
@@ -22,6 +31,8 @@ __all__ = [
     "plot_cross_sections",
     "plot_3d_pattern",
     "draw_patch_3d_geometry",
+    # New plotting functions
+    "draw_microstrip_patch_3d_geometry",
     # Fixed solvers (3D only - provides E-plane/H-plane cuts)
     "probe_openems_fixed",
     "prepare_openems_patch_fixed", 
@@ -29,4 +40,10 @@ __all__ = [
     "OpenEMSProbe",
     "OpenEMSResult",
     "OpenEMSPrepared",
+    # Microstrip solvers
+    "probe_openems_microstrip",
+    "prepare_openems_microstrip_patch",
+    "run_prepared_openems_microstrip",
+    "FeedDirection",
+    "calculate_microstrip_width",
 ]
