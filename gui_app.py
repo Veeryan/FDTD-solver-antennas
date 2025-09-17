@@ -423,6 +423,11 @@ class PlotFrame(ttk.Frame):
         self.mode = 'single'  # 'single' | 'multi'
         self.multi_panel = None
         self._mode_changed_cb = None
+        self._multi_placeholder_2d = None
+        self._multi_placeholder_3d = None
+        self._banner_geom = None
+        self._banner_2d = None
+        self._banner_3d = None
         self.setup_ui()
         
     def setup_ui(self):
@@ -453,6 +458,9 @@ class PlotFrame(ttk.Frame):
         # 3D Pattern tab
         self.pattern_3d_frame = ttk.Frame(self.notebook, style='Modern.TFrame')
         self.notebook.add(self.pattern_3d_frame, text="3D Pattern")
+
+        # Add small mode banners at the top of each tab
+        self._create_banners()
 
         # Zoom controls for Geometry and 3D Pattern
         def _add_zoom_controls(container, get_canvas, get_axes):
@@ -487,6 +495,7 @@ class PlotFrame(ttk.Frame):
         self.pattern_2d_canvas = None
         self.pattern_3d_canvas = None
         self._update_mode_buttons()
+        self._update_mode_banners()
     
     # ---- Mode management ----
     def set_mode_changed_callback(self, cb):
@@ -503,6 +512,29 @@ class PlotFrame(ttk.Frame):
         except Exception:
             pass
 
+    def _create_banners(self):
+        def make_banner(parent):
+            frame = ttk.Frame(parent, style='Modern.TFrame')
+            frame.pack(fill='x', padx=6, pady=(2, 2))
+            lbl = ttk.Label(frame, text='', style='Modern.TLabel')
+            lbl.pack(side='left')
+            return lbl
+        try:
+            self._banner_geom = make_banner(self.geometry_frame)
+            self._banner_2d = make_banner(self.pattern_2d_frame)
+            self._banner_3d = make_banner(self.pattern_3d_frame)
+        except Exception:
+            pass
+
+    def _update_mode_banners(self):
+        try:
+            mode_text = '🧍 Single Antenna view' if self.mode == 'single' else '🧩 Multi Antenna view'
+            for lbl in (self._banner_geom, self._banner_2d, self._banner_3d):
+                if lbl is not None:
+                    lbl.config(text=mode_text)
+        except Exception:
+            pass
+
     def set_mode_single(self):
         if self.mode == 'single':
             return
@@ -515,6 +547,10 @@ class PlotFrame(ttk.Frame):
             self.multi_panel = None
         self.mode = 'single'
         self._update_mode_buttons()
+        self._update_mode_banners()
+        # remove multi placeholders on pattern tabs
+        self._hide_multi_placeholder('2d')
+        self._hide_multi_placeholder('3d')
         if self._mode_changed_cb:
             try:
                 self._mode_changed_cb('single')
@@ -546,11 +582,60 @@ class PlotFrame(ttk.Frame):
             return
         self.mode = 'multi'
         self._update_mode_buttons()
+        self._update_mode_banners()
+        # show placeholders for patterns while multi-solver isn't wired
+        self._show_multi_placeholder('2d')
+        self._show_multi_placeholder('3d')
         if self._mode_changed_cb:
             try:
                 self._mode_changed_cb('multi')
             except Exception:
                 pass
+
+    # --- Placeholders for Multi mode ---
+    def _show_multi_placeholder(self, which: str):
+        try:
+            if which == '2d':
+                # clear any existing 2D canvas
+                if self.pattern_2d_canvas:
+                    self.pattern_2d_canvas.get_tk_widget().destroy()
+                    self.pattern_2d_canvas = None
+                if self._multi_placeholder_2d is None:
+                    frame = ttk.Frame(self.pattern_2d_frame, style='Modern.TFrame')
+                    lbl = ttk.Label(frame, text="Multi Antenna 2D Patterns\n(coming soon)", style='Header.TLabel')
+                    lbl.pack(pady=20)
+                    info = ttk.Label(frame, text="Edit antennas in the Geometry tab.\nRun multi-antenna FDTD will be added here.", style='Modern.TLabel')
+                    info.pack()
+                    frame.pack(fill='both', expand=True)
+                    self._multi_placeholder_2d = frame
+            elif which == '3d':
+                # clear any existing 3D canvas
+                if self.pattern_3d_canvas:
+                    self.pattern_3d_canvas.get_tk_widget().destroy()
+                    self.pattern_3d_canvas = None
+                    self._p3d_ax = None
+                    self._p3d_canvas = None
+                if self._multi_placeholder_3d is None:
+                    frame = ttk.Frame(self.pattern_3d_frame, style='Modern.TFrame')
+                    lbl = ttk.Label(frame, text="Multi Antenna 3D Patterns\n(coming soon)", style='Header.TLabel')
+                    lbl.pack(pady=20)
+                    info = ttk.Label(frame, text="Edit antennas in the Geometry tab.\nRun multi-antenna FDTD will be added here.", style='Modern.TLabel')
+                    info.pack()
+                    frame.pack(fill='both', expand=True)
+                    self._multi_placeholder_3d = frame
+        except Exception:
+            pass
+
+    def _hide_multi_placeholder(self, which: str):
+        try:
+            if which == '2d' and self._multi_placeholder_2d is not None:
+                self._multi_placeholder_2d.destroy()
+                self._multi_placeholder_2d = None
+            if which == '3d' and self._multi_placeholder_3d is not None:
+                self._multi_placeholder_3d.destroy()
+                self._multi_placeholder_3d = None
+        except Exception:
+            pass
         
     def open_multi_patch(self):
         """Open the Multi Patch Designer window."""
@@ -805,6 +890,12 @@ class PlotFrame(ttk.Frame):
     def update_2d_patterns(self, theta, intensity):
         """Update 2D radiation pattern plots - EXACT copy of Streamlit version"""
         try:
+            # Multi mode: show placeholder and exit
+            if getattr(self, 'mode', 'single') == 'multi':
+                self._show_multi_placeholder('2d')
+                return
+            # In single mode ensure placeholder is hidden
+            self._hide_multi_placeholder('2d')
             # Clear existing plot
             if self.pattern_2d_canvas:
                 self.pattern_2d_canvas.get_tk_widget().destroy()
@@ -872,6 +963,12 @@ class PlotFrame(ttk.Frame):
     def update_3d_pattern(self, theta, phi, intensity, params):
         """Update 3D radiation pattern plot - EXACT copy of Streamlit version"""
         try:
+            # Multi mode: show placeholder and exit
+            if getattr(self, 'mode', 'single') == 'multi':
+                self._show_multi_placeholder('3d')
+                return
+            # In single mode ensure placeholder is hidden
+            self._hide_multi_placeholder('3d')
             # Clear existing plot
             if self.pattern_3d_canvas:
                 self.pattern_3d_canvas.get_tk_widget().destroy()
@@ -1076,6 +1173,11 @@ class AntennaSimulatorGUI:
         # Create plot frame (no log panel)
         self.plot_frame = PlotFrame(right_panel)
         self.plot_frame.pack(fill='both', expand=True)
+        # When switching between Single/Multi, refresh as needed
+        try:
+            self.plot_frame.set_mode_changed_callback(self.on_plot_mode_changed)
+        except Exception:
+            pass
         
         # Initialize with default geometry
         self.update_geometry()
@@ -1096,6 +1198,22 @@ class AntennaSimulatorGUI:
         except Exception as e:
             messagebox.showerror("Error", f"Failed to update geometry: {e}")
             self.control_frame.set_status("Error updating geometry")
+
+    def on_plot_mode_changed(self, mode: str):
+        """React to Single/Multi mode changes in PlotFrame."""
+        try:
+            if mode == 'single':
+                # Rebuild the single-antenna geometry view with current params
+                if self.current_params is None:
+                    self.current_params = self.param_frame.get_parameters()
+                solver_type = self.param_frame.vars['solver_type'].get()
+                feed_dir = self.param_frame.vars['feed_direction'].get()
+                self.plot_frame.update_geometry_plot(self.current_params, solver_type, feed_dir)
+            else:
+                # Entered multi mode: nothing to do yet (future: disable Run Simulation)
+                pass
+        except Exception as e:
+            print(f"Mode change refresh error: {e}")
     
     def run_simulation(self):
         """Run FDTD simulation in background thread"""
