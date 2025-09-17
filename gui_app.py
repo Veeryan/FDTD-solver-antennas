@@ -399,8 +399,9 @@ class PlotFrame(ttk.Frame):
             if solver_type == "Microstrip Fed (MSL Port)":
                 # Base geometry
                 geometry_fig = draw_patch_3d_geometry(L_m, W_m, params.h_m, fig_size=(8, 6), show_labels=False)
+                ax_back = geometry_fig.gca()
+                ax_overlay = ax_back
                 # Overlay a simple 50Ω microstrip trace matching FDTD coordinates
-                ax_overlay = geometry_fig.gca()
                 feed_direction = FeedDirection(feed_direction_str)
                 feed_width_m = calculate_microstrip_width(params.frequency_hz, params.eps_r, params.h_m)
                 feed_width_mm = feed_width_m * 1e3
@@ -427,7 +428,8 @@ class PlotFrame(ttk.Frame):
                     feed_stop  = [ +feed_width_mm/2, sub_W/2, z_plane]
                 # Draw the microstrip as a small 3D box (prism) for better realism
                 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-                t = max(0.05, 0.03 * (h/ mm))  # thin visual thickness in mm
+                # Use the same copper thickness as the patch rendering for consistency
+                t = max(0.08, 0.06 * h)  # mm
                 x0, y0 = feed_start[0], feed_start[1]
                 x1, y1 = feed_stop[0], feed_stop[1]
                 z0, z1 = z_plane, z_plane + t
@@ -458,7 +460,7 @@ class PlotFrame(ttk.Frame):
                         [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]],
                         [[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]],
                     ]
-                strip = Poly3DCollection(verts, alpha=0.98, facecolor='#ff6f3d', edgecolor='#a74323', linewidth=0.9)
+                strip = Poly3DCollection(verts, alpha=0.99, facecolor='#ff6f3d', edgecolor='#a74323', linewidth=0.9)
                 try:
                     strip.set_zsort('max')
                 except Exception:
@@ -468,24 +470,38 @@ class PlotFrame(ttk.Frame):
                 # Draw a top cap to guarantee the top face always renders above the substrate
                 top_cap = Poly3DCollection([[
                     [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]
-                ]], alpha=0.99, facecolor='#ff8a65', edgecolor='#a74323', linewidth=0.7)
+                ]], alpha=1.0, facecolor='#ff6f3d', edgecolor='#a74323', linewidth=0.7)
                 try:
                     top_cap.set_zsort('max')
                 except Exception:
                     pass
                 top_cap.set_zorder(11)
                 ax_overlay.add_collection3d(top_cap)
+                # Also draw a patch top cap on overlay axis to avoid blending artifacts
+                patch_thickness = max(0.08, 0.06 * h)
+                patch_cap = Poly3DCollection([[[-L/2, -W/2, patch_thickness], [L/2, -W/2, patch_thickness], [L/2, W/2, patch_thickness], [-L/2, W/2, patch_thickness]]],
+                                             alpha=1.0, facecolor='#ffd24d', edgecolor='#b8860b', linewidth=0.9)
+                try:
+                    patch_cap.set_zsort('max')
+                except Exception:
+                    pass
+                patch_cap.set_zorder(12)
+                ax_overlay.add_collection3d(patch_cap)
                 print(f"DEBUG: Microstrip overlay added dir={feed_direction} width={feed_width_mm:.2f} mm")
+                ax_main = ax_back
             else:
-                # Use simple patch visualization
+                # Simple patch visualization (original approach)
                 geometry_fig = draw_patch_3d_geometry(L_m, W_m, params.h_m, fig_size=(8, 6), show_labels=True)
                 print("DEBUG: Simple patch geometry created")
+                ax_overlay = None
+                ax_main = geometry_fig.gca()
             print("DEBUG: Enhanced geometry plot created successfully")
             
             # Convert matplotlib figure to tkinter-compatible figure
             print("DEBUG: Converting to tkinter figure...")
             # Get the axes from the created figure
             ax = geometry_fig.gca()
+            overlay_ax = None
             
             # Style the plot to match dark theme
             print("DEBUG: Applying dark theme styling...")
@@ -513,8 +529,10 @@ class PlotFrame(ttk.Frame):
                 margin = max(5.0, 0.2 * max(L, W))
                 label_box = dict(boxstyle='round,pad=0.3', fc='black', ec='none', alpha=0.65)
                 import matplotlib.patheffects as pe
-                txt1 = ax.text(0, -W/2-0.9*margin, 0.08*h, f'L = {L:.1f} mm', ha='center', fontsize=13, color='white', bbox=label_box)
-                txt2 = ax.text(L/2+0.9*margin, 0, 0.08*h, f'W = {W:.1f} mm', ha='center', rotation=90, fontsize=13, color='white', bbox=label_box)
+                # draw labels on main axes for the simple view; overlay if available (microstrip view)
+                label_ax = ax_overlay if ax_overlay is not None else ax
+                txt1 = label_ax.text(0, -W/2-0.9*margin, 0.08*h, f'L = {L:.1f} mm', ha='center', fontsize=13, color='white', bbox=label_box)
+                txt2 = label_ax.text(L/2+0.9*margin, 0, 0.08*h, f'W = {W:.1f} mm', ha='center', rotation=90, fontsize=13, color='white', bbox=label_box)
                 for t in (txt1, txt2):
                     t.set_zorder(100)
                     t.set_path_effects([pe.withStroke(linewidth=1.5, foreground='black')])
@@ -555,19 +573,22 @@ class PlotFrame(ttk.Frame):
             except Exception:
                 ax_triad = None
             
-            # Synchronize triad view with main axes during user rotations
+            # Synchronize triad with main axes during user rotations
             try:
-                if ax_triad is not None:
-                    def _sync_triad(event=None):
+                if True:
+                    def _sync_views(event=None):
                         try:
-                            ax_triad.view_init(elev=getattr(ax, 'elev', 22), azim=getattr(ax, 'azim', -45))
+                            elev = getattr(ax, 'elev', 22)
+                            azim = getattr(ax, 'azim', -45)
+                            # keep labels on overlay updated if axes changed limits
+                            if ax_triad is not None:
+                                ax_triad.view_init(elev=elev, azim=azim)
                             self.geometry_canvas.draw_idle()
                         except Exception:
                             pass
-                    # Connect to common motion/scroll/release events
-                    cid1 = geometry_fig.canvas.mpl_connect('motion_notify_event', _sync_triad)
-                    cid2 = geometry_fig.canvas.mpl_connect('button_release_event', _sync_triad)
-                    cid3 = geometry_fig.canvas.mpl_connect('scroll_event', _sync_triad)
+                    geometry_fig.canvas.mpl_connect('motion_notify_event', _sync_views)
+                    geometry_fig.canvas.mpl_connect('button_release_event', _sync_views)
+                    geometry_fig.canvas.mpl_connect('scroll_event', _sync_views)
             except Exception:
                 pass
 
@@ -602,9 +623,13 @@ class PlotFrame(ttk.Frame):
                 # Need to extend pattern to full 360° for proper polar display - EXACT same as Streamlit
                 # The current theta goes 0° to 180°, but we need full circle
                 # Mirror the pattern: 0°-180° data becomes 0°-180° and 180°-360°
-                th_full = np.concatenate([th_deg, th_deg[1:] + 180])  # 0° to 360°
+                th_full = np.concatenate([th_deg, th_deg[1:] + 180])  # 0°..360° (open)
                 E_full = np.concatenate([E_plane, E_plane[1:][::-1]])  # Mirror E-plane
                 H_full = np.concatenate([H_plane, H_plane[1:][::-1]])  # Mirror H-plane
+                # Close the curves to avoid a gap at 0°/+Z
+                th_closed = np.concatenate([th_full, [360.0]])
+                E_closed = np.concatenate([E_full, [E_full[0]]])
+                H_closed = np.concatenate([H_full, [H_full[0]]])
                 
                 # Create polar plots - same size as 3D plot (20x10) - EXACT same as Streamlit
                 fig = Figure(figsize=(20*0.8, 10*0.8), facecolor='#2b2b2b')  # Using ui_scale=0.8 equivalent
@@ -612,7 +637,7 @@ class PlotFrame(ttk.Frame):
                 ax2 = fig.add_subplot(122, projection='polar', facecolor='#2b2b2b')
                 
                 # E-plane (phi=0°) - full 360° - EXACT same as Streamlit
-                ax1.plot(np.deg2rad(th_full), E_full, 'r-', linewidth=3, label='E-plane (phi=0°)')
+                ax1.plot(np.deg2rad(th_closed), E_closed, 'r-', linewidth=3, label='E-plane (phi=0°)')
                 ax1.set_title('E-plane (ZX, phi=0°)', fontsize=14, pad=25, color='white')
                 ax1.set_theta_zero_location('N')
                 ax1.set_theta_direction(-1)
@@ -624,7 +649,7 @@ class PlotFrame(ttk.Frame):
                 ax1.tick_params(colors='white')
                 
                 # H-plane (phi=90°) - full 360° - EXACT same as Streamlit
-                ax2.plot(np.deg2rad(th_full), H_full, 'b-', linewidth=3, label='H-plane (phi=90°)')
+                ax2.plot(np.deg2rad(th_closed), H_closed, 'b-', linewidth=3, label='H-plane (phi=90°)')
                 ax2.set_title('H-plane (YZ, phi=90°)', fontsize=14, pad=25, color='white')
                 ax2.set_theta_zero_location('N')
                 ax2.set_theta_direction(-1)
@@ -964,11 +989,14 @@ class AntennaSimulatorGUI:
                 def flush(self):
                     self.original_stream.flush()
             
-            # Function to send log messages to GUI thread-safely
+            # Function to send log messages safely to the real console (avoid recursion)
             def log_to_gui(message):
-                # Filter out very short or repetitive messages and show meaningful ones
-                if len(message) > 3:  # Only show meaningful messages
-                    print(message)
+                try:
+                    if len(message) > 3:
+                        sys.__stdout__.write(message + "\n")
+                        sys.__stdout__.flush()
+                except Exception:
+                    pass
                 
             # Also try to capture console output using Windows-specific method
             def try_capture_console_output():
@@ -986,47 +1014,30 @@ class AntennaSimulatorGUI:
                     pass  # Fallback to progress messages only
             
             try_capture_console_output()
-            
-            # Capture both stdout and stderr during simulation
-            stdout_capture = LogCapture(log_to_gui, sys.__stdout__)
-            stderr_capture = LogCapture(log_to_gui, sys.__stderr__)
-            
+
             print("Running FDTD simulation...")
             print("This may take 30-60 seconds...")
             
-            # Run simulation with output capture (simplified approach)
-            original_stdout = sys.stdout
-            original_stderr = sys.stderr
-            try:
-                sys.stdout = stdout_capture
-                sys.stderr = stderr_capture
-                
-                # Add progress messages to log
-                print("Running simulation directly...")
-                
-                if is_microstrip:
-                    from antenna_sim.solver_fdtd_openems_microstrip import run_prepared_openems_microstrip
-                    result = run_prepared_openems_microstrip(
-                        prepared,
-                        frequency_hz=self.current_params.frequency_hz,
-                        verbose=2  # More verbose output
-                    )
-                else:
-                    from antenna_sim.solver_fdtd_openems_fixed import run_prepared_openems_fixed
-                    result = run_prepared_openems_fixed(
-                        prepared,
-                        frequency_hz=self.current_params.frequency_hz,
-                        verbose=2  # More verbose output
-                    )
-                
-                if not result.ok:
-                    raise Exception(f"Simulation failed: {result.message}")
-                    
-                print("Simulation completed successfully!")
-                
-            finally:
-                sys.stdout = original_stdout
-                sys.stderr = original_stderr
+            # Run simulation without re-routing stdout to avoid recursion issues
+            if is_microstrip:
+                from antenna_sim.solver_fdtd_openems_microstrip import run_prepared_openems_microstrip
+                result = run_prepared_openems_microstrip(
+                    prepared,
+                    frequency_hz=self.current_params.frequency_hz,
+                    verbose=2
+                )
+            else:
+                from antenna_sim.solver_fdtd_openems_fixed import run_prepared_openems_fixed
+                result = run_prepared_openems_fixed(
+                    prepared,
+                    frequency_hz=self.current_params.frequency_hz,
+                    verbose=2
+                )
+            
+            if not result.ok:
+                raise Exception(f"Simulation failed: {result.message}")
+            
+            print("Simulation completed successfully!")
             
             if not result.ok:
                 raise Exception(f"Simulation failed: {result.message}")

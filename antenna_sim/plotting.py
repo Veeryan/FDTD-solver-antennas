@@ -23,7 +23,8 @@ def draw_patch_3d_geometry(L_m: float, W_m: float, h_m: float, fig_size=(8, 6), 
     ax = fig.add_subplot(111, projection='3d')
     
     # Substrate (sides + bottom only to avoid occluding patch)
-    side_top_z = -0.02  # keep a tiny gap below patch plane so metals always appear on top
+    # Keep a tiny visual gap under the patch plane to reduce alpha overlays at oblique angles
+    side_top_z = -0.02
     substrate_side_bottom = [
         # bottom
         [[-sub_L/2, -sub_W/2, -h], [sub_L/2, -sub_W/2, -h], [sub_L/2, sub_W/2, -h], [-sub_L/2, sub_W/2, -h]],
@@ -37,8 +38,13 @@ def draw_patch_3d_geometry(L_m: float, W_m: float, h_m: float, fig_size=(8, 6), 
         [[-sub_L/2, sub_W/2, -h], [sub_L/2, sub_W/2, -h], [sub_L/2, sub_W/2, side_top_z], [-sub_L/2, sub_W/2, side_top_z]],
     ]
     
-    # FR-4 style green substrate (less transparent, neon-ish) - thinner visual block
-    substrate = Poly3DCollection(substrate_side_bottom, alpha=0.78, facecolor='#39ff14', edgecolor='#00a000', linewidth=1.0)
+    # FR-4 style green substrate (transparent) - thinner visual block, original color
+    # Slightly lower alpha to prevent dominance in top views
+    substrate = Poly3DCollection(substrate_side_bottom, alpha=0.45, facecolor='#2e7d32', edgecolor='#1b5e20', linewidth=1.0)
+    try:
+        substrate.set_zsort('min')
+    except Exception:
+        pass
     try:
         substrate.set_zsort('min')  # draw behind metals
     except Exception:
@@ -46,15 +52,15 @@ def draw_patch_3d_geometry(L_m: float, W_m: float, h_m: float, fig_size=(8, 6), 
     substrate.set_zorder(1)
     ax.add_collection3d(substrate)
     
-    # Ground plane (bottom of substrate)
+    # Ground plane (bottom of substrate) - original solid style
     ground_verts = [[[-sub_L/2, -sub_W/2, -h], [sub_L/2, -sub_W/2, -h], [sub_L/2, sub_W/2, -h], [-sub_L/2, sub_W/2, -h]]]
     ground = Poly3DCollection(ground_verts, alpha=0.9, facecolor='#9ea7ad', edgecolor='#6b7074')
-    ground.set_zorder(2)
     ax.add_collection3d(ground)
     
     # Patch (top metal layer)
-    # Keep copper visible but slimmer for a cleaner look
-    patch_thickness = max(0.08, 0.06 * h)  # visual thickness (mm)
+    # Copper thickness (visual) taken as a small fraction of substrate height
+    # If you want to drive this from a user metal thickness, thread it through here
+    patch_thickness = max(0.08, 0.06 * h)  # mm
     patch_verts = [
         [[-L/2, -W/2, 0], [L/2, -W/2, 0], [L/2, W/2, 0], [-L/2, W/2, 0]],  # bottom
         [[-L/2, -W/2, patch_thickness], [L/2, -W/2, patch_thickness], [L/2, W/2, patch_thickness], [-L/2, W/2, patch_thickness]],  # top
@@ -64,7 +70,8 @@ def draw_patch_3d_geometry(L_m: float, W_m: float, h_m: float, fig_size=(8, 6), 
         [[-L/2, W/2, 0], [L/2, W/2, 0], [L/2, W/2, patch_thickness], [-L/2, W/2, patch_thickness]]      # back
     ]
     
-    patch = Poly3DCollection(patch_verts, alpha=0.95, facecolor='#ffd24d', edgecolor='#b8860b', linewidth=1.2)
+    # Slightly higher alpha so patch dominates top-down
+    patch = Poly3DCollection(patch_verts, alpha=0.98, facecolor='#ffd24d', edgecolor='#b8860b', linewidth=1.2)
     try:
         patch.set_zsort('max')
     except Exception:
@@ -72,16 +79,7 @@ def draw_patch_3d_geometry(L_m: float, W_m: float, h_m: float, fig_size=(8, 6), 
     patch.set_zorder(5)
     ax.add_collection3d(patch)
 
-    # Ensure the very top copper face renders on top in all views (drawn as a separate cap)
-    patch_cap = Poly3DCollection([
-        [[-L/2, -W/2, patch_thickness], [L/2, -W/2, patch_thickness], [L/2, W/2, patch_thickness], [-L/2, W/2, patch_thickness]]
-    ], alpha=0.98, facecolor='#ffd24d', edgecolor='#b8860b', linewidth=1.0)
-    try:
-        patch_cap.set_zsort('max')
-    except Exception:
-        pass
-    patch_cap.set_zorder(9)
-    ax.add_collection3d(patch_cap)
+    # Remove separate cap (revert to simpler original rendering)
     # Ensure patch appears visually above substrate sides
     try:
         for coll in ax.collections:

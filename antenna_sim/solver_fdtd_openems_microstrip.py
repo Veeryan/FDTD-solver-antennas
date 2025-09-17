@@ -264,8 +264,8 @@ def prepare_openems_microstrip_patch(
             feed_start = [-substrate_W/2, -feed_width/2, h]
             feed_stop = [-patch_W/2, feed_width/2, h]
             # Port spans all 3 dimensions (following MSL_NotchFilter.py pattern)
-            port_start = [-substrate_W/2, -feed_width/2, h]  # One corner
-            port_stop = [-patch_W/2, feed_width/2, 0]        # Opposite corner
+            port_start = [-substrate_W/2, -feed_width/2, h]  # One corner (top of substrate)
+            port_stop = [-substrate_W/2 + min(feed_line_length, (substrate_W - patch_W)/2), feed_width/2, 0]  # extend into dielectric
             port_dir = 'x'
             
         elif feed_direction == FeedDirection.POS_X:
@@ -273,8 +273,8 @@ def prepare_openems_microstrip_patch(
             feed_start = [patch_W/2, -feed_width/2, h]
             feed_stop = [substrate_W/2, feed_width/2, h]
             # Port spans all 3 dimensions (following MSL_NotchFilter.py pattern)
-            port_start = [substrate_W/2, -feed_width/2, h]   # One corner
-            port_stop = [patch_W/2, feed_width/2, 0]         # Opposite corner
+            port_start = [substrate_W/2, -feed_width/2, h]
+            port_stop = [substrate_W/2 - min(feed_line_length, (substrate_W - patch_W)/2), feed_width/2, 0]
             port_dir = 'x'
             
         elif feed_direction == FeedDirection.NEG_Y:
@@ -282,8 +282,8 @@ def prepare_openems_microstrip_patch(
             feed_start = [-feed_width/2, -substrate_L/2, h]
             feed_stop = [feed_width/2, -patch_L/2, h]
             # Port spans all 3 dimensions (following MSL_NotchFilter.py pattern)
-            port_start = [-feed_width/2, -substrate_L/2, h]  # One corner
-            port_stop = [feed_width/2, -patch_L/2, 0]        # Opposite corner
+            port_start = [-feed_width/2, -substrate_L/2, h]
+            port_stop = [feed_width/2, -substrate_L/2 + min(feed_line_length, (substrate_L - patch_L)/2), 0]
             port_dir = 'y'
             
         else:  # FeedDirection.POS_Y
@@ -291,8 +291,8 @@ def prepare_openems_microstrip_patch(
             feed_start = [-feed_width/2, patch_L/2, h]
             feed_stop = [feed_width/2, substrate_L/2, h]
             # Port spans all 3 dimensions (following MSL_NotchFilter.py pattern)
-            port_start = [-feed_width/2, substrate_L/2, h]   # One corner
-            port_stop = [feed_width/2, patch_L/2, 0]         # Opposite corner
+            port_start = [-feed_width/2, substrate_L/2, h]
+            port_stop = [feed_width/2, substrate_L/2 - min(feed_line_length, (substrate_L - patch_L)/2), 0]
             port_dir = 'y'
         
         # Add feed line
@@ -339,8 +339,8 @@ def prepare_openems_microstrip_patch(
             shutil.rmtree(sim_path, ignore_errors=True)
         os.makedirs(sim_path, exist_ok=True)
         
-        # Define angles for far-field calculation
-        theta = np.arange(0.0, 180.0, 2.0)  # 0° to 180° in 2° steps
+        # Define angles for far-field calculation (include zenith explicitly to avoid gaps)
+        theta = np.arange(0.0, 181.0, 2.0)  # 0° to 180° inclusive
         phi = np.array([0.0, 90.0])  # E-plane and H-plane cuts
         nf_center = np.array([0.0, 0.0, h/2000.0])  # Center at substrate middle (convert to meters)
         
@@ -452,24 +452,16 @@ def run_prepared_openems_microstrip(
             phi_rad = phi * np.pi / 180.0
             
             # Prepare results
-            result_data = {
-                'theta': theta_rad,
-                'phi': phi_rad, 
-                'intensity': intensity_dB,
-                'frequency_hz': f_res,
-                'directivity_dbi': 10*np.log10(Dmax_val),
-                'feed_direction': getattr(prepared, 'feed_direction', 'unknown')
-            }
-            
-            # Add port data if available
-            if port is not None:
-                result_data.update({
-                    'impedance': port.uf_tot / port.if_tot,
-                    's11_db': s11_dB,
-                    'frequencies': f
-                })
-            
-            return OpenEMSResult(True, "Microstrip simulation completed successfully", **result_data)
+            # Return in the harmonized result structure used by the fixed solver
+            return OpenEMSResult(
+                True,
+                "Microstrip simulation completed successfully",
+                theta=theta_rad,
+                phi=phi_rad,
+                intensity=intensity_dB,
+                sim_path=sim_path,
+                is_dBi=True,
+            )
             
         except Exception as e:
             return OpenEMSResult(False, f"Far-field processing failed: {e}")
