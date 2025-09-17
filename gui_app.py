@@ -130,7 +130,7 @@ class ParameterFrame(ttk.Frame):
         ttk.Label(params_frame, text="Solver Type:", style='Modern.TLabel').grid(row=5, column=0, sticky='w', pady=2)
         self.vars['solver_type'] = tk.StringVar(value="Simple (Lumped Port)")
         solver_combo = ttk.Combobox(params_frame, textvariable=self.vars['solver_type'], style='Modern.TCombobox', width=20)
-        solver_combo['values'] = ["Simple (Lumped Port)", "Microstrip Fed (MSL Port)"]
+        solver_combo['values'] = ["Simple (Lumped Port)", "Microstrip Fed (MSL Port)", "Microstrip Fed (MSL Port, 3D)"]
         solver_combo.grid(row=5, column=1, sticky='ew', padx=(5, 0), pady=2)
         solver_combo.state(['readonly'])
         solver_combo.bind('<<ComboboxSelected>>', self.on_solver_type_change)
@@ -396,7 +396,7 @@ class PlotFrame(ttk.Frame):
             
             # Create enhanced geometry plot
             print("DEBUG: Creating enhanced geometry plot...")
-            if solver_type == "Microstrip Fed (MSL Port)":
+            if solver_type == "Microstrip Fed (MSL Port)" or solver_type == "Microstrip Fed (MSL Port, 3D)":
                 # Base geometry
                 geometry_fig = draw_patch_3d_geometry(L_m, W_m, params.h_m, fig_size=(8, 6), show_labels=False)
                 ax_back = geometry_fig.gca()
@@ -941,7 +941,11 @@ class AntennaSimulatorGUI:
             print(f"Preparing {solver_name} simulation...")
             
             if is_microstrip:
-                from antenna_sim.solver_fdtd_openems_microstrip import prepare_openems_microstrip_patch, FeedDirection
+                from antenna_sim.solver_fdtd_openems_microstrip import FeedDirection
+                if solver_type == "Microstrip Fed (MSL Port, 3D)":
+                    from antenna_sim.solver_fdtd_openems_microstrip_3d import prepare_openems_microstrip_patch_3d as prepare_openems_microstrip_patch
+                else:
+                    from antenna_sim.solver_fdtd_openems_microstrip import prepare_openems_microstrip_patch
                 # Get feed direction for microstrip solver
                 feed_dir_str = self.param_frame.vars['feed_direction'].get()
                 feed_direction = FeedDirection(feed_dir_str)
@@ -1020,12 +1024,20 @@ class AntennaSimulatorGUI:
             
             # Run simulation without re-routing stdout to avoid recursion issues
             if is_microstrip:
-                from antenna_sim.solver_fdtd_openems_microstrip import run_prepared_openems_microstrip
-                result = run_prepared_openems_microstrip(
-                    prepared,
-                    frequency_hz=self.current_params.frequency_hz,
-                    verbose=2
-                )
+                    if solver_type == "Microstrip Fed (MSL Port, 3D)":
+                        from antenna_sim.solver_fdtd_openems_microstrip_3d import run_prepared_openems_microstrip_3d
+                        result = run_prepared_openems_microstrip_3d(
+                            prepared,
+                            frequency_hz=self.current_params.frequency_hz,
+                            verbose=2
+                        )
+                    else:
+                        from antenna_sim.solver_fdtd_openems_microstrip import run_prepared_openems_microstrip
+                        result = run_prepared_openems_microstrip(
+                            prepared,
+                            frequency_hz=self.current_params.frequency_hz,
+                            verbose=2
+                        )
             else:
                 from antenna_sim.solver_fdtd_openems_fixed import run_prepared_openems_fixed
                 result = run_prepared_openems_fixed(
@@ -1066,11 +1078,22 @@ class AntennaSimulatorGUI:
             phi = result.phi
             intensity = np.asarray(result.intensity)
             
-            # Update 2D patterns
-            self.plot_frame.update_2d_patterns(theta, intensity)
-            
-            # Update 3D pattern
-            self.plot_frame.update_3d_pattern(theta, phi, intensity, self.current_params)
+            # If we have a full 3D grid (theta x phi), show 3D pattern directly
+            if intensity.ndim == 2 and phi is not None and theta is not None and intensity.shape == (len(theta), len(phi)):
+                self.plot_frame.update_3d_pattern(theta, phi, intensity, self.current_params)
+                # Also synthesize E/H plane cuts for 2D tab: phi=0 and phi=90
+                try:
+                    phi_vals = np.asarray(phi)
+                    idx0 = int(np.argmin(np.abs(phi_vals - 0.0)))
+                    idx90 = int(np.argmin(np.abs(phi_vals - (np.pi/2))))
+                    cuts = np.stack([intensity[:, idx0], intensity[:, idx90]], axis=1)
+                    self.plot_frame.update_2d_patterns(theta, cuts)
+                except Exception:
+                    self.plot_frame.update_2d_patterns(theta, intensity)
+            else:
+                # Fall back to existing behavior: update 2D cuts first, then 3D interpolation
+                self.plot_frame.update_2d_patterns(theta, intensity)
+                self.plot_frame.update_3d_pattern(theta, phi, intensity, self.current_params)
             
             # Switch to results tab
             self.plot_frame.notebook.select(1)  # Switch to 2D patterns tab
