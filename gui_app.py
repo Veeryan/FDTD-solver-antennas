@@ -419,12 +419,24 @@ class PlotFrame(ttk.Frame):
     
     def __init__(self, parent):
         super().__init__(parent, style='Card.TFrame')
+        # mode management
+        self.mode = 'single'  # 'single' | 'multi'
+        self.multi_panel = None
+        self._mode_changed_cb = None
         self.setup_ui()
         
     def setup_ui(self):
         # Header
         header = ttk.Label(self, text="📊 Visualization", style='Header.TLabel')
         header.pack(fill='x', padx=10, pady=(10, 5))
+        
+        # Small toolbar above tabs (mode selector)
+        toolbar = ttk.Frame(self, style='Modern.TFrame')
+        toolbar.pack(fill='x', padx=10, pady=(0, 4))
+        self.btn_single = ttk.Button(toolbar, text="Single Antenna", style='Modern.TButton', command=self.set_mode_single)
+        self.btn_single.pack(side='left', padx=(0, 6))
+        self.btn_multi = ttk.Button(toolbar, text="Multi Antenna", style='Modern.TButton', command=self.set_mode_multi)
+        self.btn_multi.pack(side='left')
         
         # Notebook for tabs
         self.notebook = ttk.Notebook(self)
@@ -474,10 +486,89 @@ class PlotFrame(ttk.Frame):
         self.geometry_canvas = None
         self.pattern_2d_canvas = None
         self.pattern_3d_canvas = None
+        self._update_mode_buttons()
+    
+    # ---- Mode management ----
+    def set_mode_changed_callback(self, cb):
+        self._mode_changed_cb = cb
+    
+    def _update_mode_buttons(self):
+        try:
+            if self.mode == 'single':
+                self.btn_single.state(['disabled'])
+                self.btn_multi.state(['!disabled'])
+            else:
+                self.btn_multi.state(['disabled'])
+                self.btn_single.state(['!disabled'])
+        except Exception:
+            pass
+
+    def set_mode_single(self):
+        if self.mode == 'single':
+            return
+        # remove multi panel if present
+        if self.multi_panel is not None:
+            try:
+                self.multi_panel.destroy()
+            except Exception:
+                pass
+            self.multi_panel = None
+        self.mode = 'single'
+        self._update_mode_buttons()
+        if self._mode_changed_cb:
+            try:
+                self._mode_changed_cb('single')
+            except Exception:
+                pass
+
+    def set_mode_multi(self):
+        if self.mode == 'multi':
+            return
+        # destroy single geometry canvas if present
+        try:
+            if self.geometry_canvas:
+                self.geometry_canvas.get_tk_widget().destroy()
+        except Exception:
+            pass
+        self.geometry_canvas = None
+        self._geom_canvas = None
+        self._geom_ax = None
+        # create embedded panel
+        try:
+            from antenna_sim.multi_patch_designer import MultiPatchPanel
+            self.multi_panel = MultiPatchPanel(self.geometry_frame)
+            self.multi_panel.pack(fill='both', expand=True)
+        except Exception as e:
+            try:
+                messagebox.showerror("Error", f"Failed to open Multi Antenna view: {e}")
+            except Exception:
+                pass
+            return
+        self.mode = 'multi'
+        self._update_mode_buttons()
+        if self._mode_changed_cb:
+            try:
+                self._mode_changed_cb('multi')
+            except Exception:
+                pass
+        
+    def open_multi_patch(self):
+        """Open the Multi Patch Designer window."""
+        try:
+            from antenna_sim.multi_patch_designer import MultiPatchDesigner
+            MultiPatchDesigner(self.winfo_toplevel())
+        except Exception as e:
+            try:
+                messagebox.showerror("Error", f"Failed to open Multi Patch Designer: {e}")
+            except Exception:
+                pass
         
     def update_geometry_plot(self, params, solver_type: str = "Simple (Lumped Port)", feed_direction_str: str = "-X"):
         """Update the geometry visualization"""
         try:
+            # If in multi mode, skip single-antenna drawing
+            if getattr(self, 'mode', 'single') == 'multi':
+                return
             print("DEBUG: Starting geometry plot update...")
             print(f"DEBUG: Params - freq={params.frequency_hz/1e9:.2f}GHz, εr={params.eps_r}, h={params.h_m*1e3:.1f}mm")
             
