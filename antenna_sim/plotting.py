@@ -115,15 +115,7 @@ def draw_patch_3d_geometry(L_m: float, W_m: float, h_m: float, fig_size=(8, 6), 
     ax.plot([xh, xh], [yh, yh], [-h, 0], color='#ff7043', linewidth=2.0)
     ax.text(xh, yh, -h*0.5, f'h = {h:.2f} mm', color='white', fontsize=13, bbox=label_box, ha='center')
     
-    # Coordinate axes
-    max_dim = max(sub_L, sub_W) / 2
-    ax.plot([0, max_dim*0.3], [0, 0], [patch_thickness*2, patch_thickness*2], 'r-', linewidth=3, alpha=0.8)
-    ax.plot([0, 0], [0, max_dim*0.3], [patch_thickness*2, patch_thickness*2], 'g-', linewidth=3, alpha=0.8)
-    ax.plot([0, 0], [0, 0], [patch_thickness*2, patch_thickness*2 + h*0.3], 'b-', linewidth=3, alpha=0.8)
-    
-    ax.text(max_dim*0.35, 0, patch_thickness*2, 'x', color='red', fontsize=12, weight='bold')
-    ax.text(0, max_dim*0.35, patch_thickness*2, 'y', color='green', fontsize=12, weight='bold')
-    ax.text(0, 0, patch_thickness*2 + h*0.35, 'z', color='blue', fontsize=12, weight='bold')
+    # Note: in-scene coordinate axes removed; a corner triad overlay is added in the GUI
     
     # Set limits and labels
     max_range = max(sub_L, sub_W, h*3) / 2

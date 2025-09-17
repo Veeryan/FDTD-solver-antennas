@@ -32,16 +32,17 @@ from antenna_sim import (
 class ModernStyle:
     """Modern color scheme and styling constants"""
     
-    # Color palette
-    BG_DARK = "#2b2b2b"
-    BG_MEDIUM = "#3c3c3c"
-    BG_LIGHT = "#4a4a4a"
-    ACCENT_BLUE = "#0078d4"
-    ACCENT_GREEN = "#107c10"
-    ACCENT_ORANGE = "#ff8c00"
-    TEXT_WHITE = "#ffffff"
-    TEXT_GRAY = "#cccccc"
-    BORDER = "#5a5a5a"
+    # Color palette (high-contrast, friendly "bubbly" accents)
+    BG_DARK = "#161a1f"       # app background
+    BG_MEDIUM = "#1f2530"     # cards / panels
+    BG_LIGHT = "#273043"      # inputs
+    ACCENT_BLUE = "#0ea5e9"   # primary
+    ACCENT_GREEN = "#22c55e"  # success
+    ACCENT_ORANGE = "#f59e0b" # warning
+    ACCENT_PURPLE = "#7c3aed" # highlight
+    TEXT_WHITE = "#f5f7fb"
+    TEXT_GRAY = "#c7cbe0"
+    BORDER = "#3a4152"
     
     # Fonts
     FONT_MAIN = ("Segoe UI", 10)
@@ -61,15 +62,50 @@ class ModernStyle:
         style.configure('Card.TFrame', background=cls.BG_MEDIUM, relief='solid', borderwidth=1)
         style.configure('Modern.TLabel', background=cls.BG_DARK, foreground=cls.TEXT_WHITE, font=cls.FONT_MAIN)
         style.configure('Header.TLabel', background=cls.BG_DARK, foreground=cls.TEXT_WHITE, font=cls.FONT_HEADER)
-        style.configure('Modern.TEntry', fieldbackground=cls.BG_LIGHT, foreground=cls.TEXT_WHITE, borderwidth=1, relief='solid')
-        style.configure('Modern.TCombobox', fieldbackground=cls.BG_LIGHT, foreground=cls.TEXT_WHITE, borderwidth=1)
-        style.configure('Modern.TButton', background=cls.ACCENT_BLUE, foreground=cls.TEXT_WHITE, borderwidth=0, focuscolor='none')
-        style.configure('Success.TButton', background=cls.ACCENT_GREEN, foreground=cls.TEXT_WHITE, borderwidth=0, focuscolor='none')
-        style.configure('Warning.TButton', background=cls.ACCENT_ORANGE, foreground=cls.TEXT_WHITE, borderwidth=0, focuscolor='none')
+
+        # Inputs (high-contrast, readable in all states)
+        style.configure('Modern.TEntry',
+                        fieldbackground='#374151',  # slate-700
+                        foreground=cls.TEXT_WHITE,
+                        borderwidth=1,
+                        relief='solid',
+                        insertcolor=cls.TEXT_WHITE,
+                        padding=4)
+        style.map('Modern.TEntry',
+                  fieldbackground=[('disabled', '#3f4c63'), ('readonly', '#3a475d')],
+                  foreground=[('disabled', '#cbd5e1'), ('readonly', cls.TEXT_WHITE)])
+
+        style.configure('Modern.TCombobox',
+                        fieldbackground='#374151',
+                        background='#111827',
+                        foreground=cls.TEXT_WHITE,
+                        borderwidth=1,
+                        relief='solid',
+                        padding=4)
+        style.map('Modern.TCombobox',
+                  fieldbackground=[('readonly', '#334155'), ('disabled', '#3f4c63')],
+                  foreground=[('readonly', '#f8fafc'), ('disabled', '#cbd5e1')],
+                  selectbackground=[('!disabled', '#1e40af')],  # indigo-800
+                  selectforeground=[('!disabled', '#ffffff')])
+
+        # Notebook tabs
+        style.configure('TNotebook', background=cls.BG_DARK, borderwidth=0)
+        style.configure('TNotebook.Tab', background=cls.BG_MEDIUM, foreground=cls.TEXT_GRAY, padding=(10, 6))
+        style.map('TNotebook.Tab',
+                  background=[('selected', '#334155')],
+                  foreground=[('selected', '#f8fafc')])
+
+        # Buttons (bubbly, brighter)
+        style.configure('Modern.TButton', background=cls.ACCENT_BLUE, foreground=cls.TEXT_WHITE,
+                        borderwidth=0, focuscolor='none', padding=(10, 6))
+        style.configure('Success.TButton', background=cls.ACCENT_GREEN, foreground=cls.TEXT_WHITE,
+                        borderwidth=0, focuscolor='none', padding=(10, 6))
+        style.configure('Warning.TButton', background=cls.ACCENT_ORANGE, foreground=cls.TEXT_WHITE,
+                        borderwidth=0, focuscolor='none', padding=(10, 6))
         
         # Map styles for different states
         style.map('Modern.TButton',
-                 background=[('active', '#106ebe'), ('pressed', '#005a9e')])
+                 background=[('active', '#38bdf8'), ('pressed', '#0ea5e9')])
         style.map('Success.TButton',
                  background=[('active', '#0e6e0e'), ('pressed', '#0c5d0c')])
 
@@ -608,35 +644,22 @@ class PlotFrame(ttk.Frame):
             
             geometry_fig.tight_layout()
             print("DEBUG: Dark theme styling complete")
-            # Add a true 3D mini triad with perspective in the top-left
+            # Corner triad overlay (top-left) to replace the in-scene axes
             ax_triad = None
             try:
-                # Place inset axes relative to the figure
-                inset_rect = [0.08, 0.74, 0.16, 0.22]
+                inset_rect = [0.06, 0.78, 0.12, 0.16]  # top-left corner
                 ax_triad = geometry_fig.add_axes(inset_rect, projection='3d')
-                # Make background fully transparent / frameless
-                ax_triad.set_axis_off()
-                ax_triad.patch.set_alpha(0)
-                # Limits and aspect for a compact triad
-                ax_triad.set_xlim([-0.05, 1.1])
-                ax_triad.set_ylim([-0.05, 1.1])
-                ax_triad.set_zlim([-0.05, 1.1])
-                try:
-                    ax_triad.set_box_aspect([1, 1, 1])
-                except Exception:
-                    pass
-                # Sync the initial view with the main axes
-                ax_triad.view_init(elev=getattr(ax, 'elev', 22), azim=getattr(ax, 'azim', -45))
-                # Draw arrows with arrowheads
-                arrow_len = 1.0
-                arrow_kw = dict(length=arrow_len, normalize=True, arrow_length_ratio=0.20, linewidth=2.2)
-                ax_triad.quiver(0, 0, 0, 1, 0, 0, color='red', **arrow_kw)
-                ax_triad.quiver(0, 0, 0, 0, 1, 0, color='green', **arrow_kw)
-                ax_triad.quiver(0, 0, 0, 0, 0, 1, color='blue', **arrow_kw)
-                # Labels placed slightly beyond tips
-                ax_triad.text(1.04, 0, 0, 'X', color='red', fontsize=8, weight='bold')
-                ax_triad.text(0, 1.04, 0, 'Y', color='green', fontsize=8, weight='bold')
-                ax_triad.text(0, 0, 1.04, 'Z', color='blue', fontsize=8, weight='bold')
+                ax_triad.set_axis_off(); ax_triad.patch.set_alpha(0)
+                ax_triad.set_xlim([-0.05, 1.05]); ax_triad.set_ylim([-0.05, 1.05]); ax_triad.set_zlim([-0.05, 1.05])
+                try: ax_triad.set_box_aspect([1,1,1])
+                except Exception: pass
+                arrow_kw = dict(length=1.0, normalize=True, arrow_length_ratio=0.2, linewidth=2.2)
+                ax_triad.quiver(0,0,0, 1,0,0, color='red', **arrow_kw)
+                ax_triad.quiver(0,0,0, 0,1,0, color='green', **arrow_kw)
+                ax_triad.quiver(0,0,0, 0,0,1, color='blue', **arrow_kw)
+                ax_triad.text(1.02,0,0,'x', color='red', weight='bold')
+                ax_triad.text(0,1.02,0,'y', color='green', weight='bold')
+                ax_triad.text(0,0,1.02,'z', color='blue', weight='bold')
             except Exception:
                 ax_triad = None
             
