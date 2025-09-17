@@ -135,6 +135,8 @@ def prepare_openems_microstrip_patch(
     dll_dir: str,
     feed_direction: FeedDirection = FeedDirection.NEG_X,
     feed_line_length_mm: float = 20.0,
+    boundary: str = "MUR",
+    theta_step_deg: float = 2.0,
     work_dir: str = "openems_out_microstrip",
     cleanup: bool = True,
     verbose: int = 0,
@@ -213,7 +215,8 @@ def prepare_openems_microstrip_patch(
         # FDTD setup (following Simple_Patch_Antenna.py tutorial exactly)
         FDTD = openEMS(NrTS=30000, EndCriteria=1e-4)  # Same as tutorial
         FDTD.SetGaussExcite(f0, fc)
-        FDTD.SetBoundaryCond(['MUR', 'MUR', 'MUR', 'MUR', 'MUR', 'MUR'])  # MUR like tutorial
+        bc = ['MUR'] * 6 if boundary.upper().startswith('MUR') else ['PML_8'] * 6
+        FDTD.SetBoundaryCond(bc)
         
         # Geometry and mesh setup (tutorial order)
         CSX = ContinuousStructure()
@@ -340,8 +343,10 @@ def prepare_openems_microstrip_patch(
         os.makedirs(sim_path, exist_ok=True)
         
         # Define angles for far-field calculation (include zenith explicitly to avoid gaps)
-        theta = np.arange(0.0, 181.0, 2.0)  # 0° to 180° inclusive
-        phi = np.array([0.0, 90.0])  # E-plane and H-plane cuts
+        step = max(0.5, float(theta_step_deg))
+        theta = np.arange(0.0, 181.0, step)  # 0° to 180° inclusive
+        # Force fixed phi cuts for classic E/H planes
+        phi = np.array([0.0, 90.0])
         nf_center = np.array([0.0, 0.0, h/2000.0])  # Center at substrate middle (convert to meters)
         
         return OpenEMSPrepared(

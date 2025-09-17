@@ -20,6 +20,9 @@ def prepare_openems_microstrip_patch_3d(
     dll_dir: str,
     feed_direction: FeedDirection = FeedDirection.NEG_X,
     feed_line_length_mm: float = 20.0,
+    boundary: str = "MUR",
+    theta_step_deg: float = 2.0,
+    phi_step_deg: float = 5.0,
     work_dir: str = "openems_out_microstrip",
     cleanup: bool = True,
     verbose: int = 0,
@@ -74,7 +77,8 @@ def prepare_openems_microstrip_patch_3d(
 
         FDTD = openEMS(NrTS=30000, EndCriteria=1e-4)
         FDTD.SetGaussExcite(f0, fc)
-        FDTD.SetBoundaryCond(['MUR', 'MUR', 'MUR', 'MUR', 'MUR', 'MUR'])
+        bc = ['MUR'] * 6 if boundary.upper().startswith('MUR') else ['PML_8'] * 6
+        FDTD.SetBoundaryCond(bc)
 
         CSX = ContinuousStructure()
         FDTD.SetCSX(CSX)
@@ -147,9 +151,9 @@ def prepare_openems_microstrip_patch_3d(
             shutil.rmtree(sim_path, ignore_errors=True)
         os.makedirs(sim_path, exist_ok=True)
 
-        # Dense 3D sampling
-        theta = np.arange(0.0, 181.0, 2.0)
-        phi = np.arange(0.0, 361.0, 5.0)
+        # Dense 3D sampling (user configurable)
+        theta = np.arange(0.0, 181.0, max(0.5, float(theta_step_deg)))
+        phi = np.arange(0.0, 361.0, max(1.0, float(phi_step_deg)))
 
         return OpenEMSPrepared(True, "Microstrip 3D prepared", FDTD=FDTD, nf=nf2ff, sim_path=sim_path,
                                theta=theta, phi=phi, nf_center=np.array([0.0, 0.0, h/2000.0]))
@@ -181,6 +185,7 @@ def run_prepared_openems_microstrip_3d(
 
         # Sweep phi values and stack E_norm
         E_stack = []
+        Dmax_val: Optional[float] = None
         for ph in phi:
             res = nf2ff.CalcNF2FF(sim_path, f_res, theta, np.array([ph]), center=prepared.nf_center)
             if res is None or not hasattr(res, 'E_norm'):
@@ -190,13 +195,22 @@ def run_prepared_openems_microstrip_3d(
             if e.ndim != 1:
                 e = e.reshape(-1)
             E_stack.append(e)
+            # Capture Dmax (directivity) once; expected to be constant for given frequency
+            if Dmax_val is None and hasattr(res, 'Dmax'):
+                try:
+                    Dmax_val = float(np.asarray(res.Dmax)[0])
+                except Exception:
+                    Dmax_val = None
 
         E_arr = np.stack(E_stack, axis=1)  # (theta, phi)
         E_max = np.max(E_arr)
         if E_max <= 0:
             E_max = 1.0
-        # Convert to dBi-like scale using max normalization (no Dmax without full integration)
-        intensity_dB = 20.0*np.log10(E_arr / E_max + 1e-16)
+        # Convert to absolute dBi using Dmax if available; else normalized to 0 dB max
+        if Dmax_val is not None and Dmax_val > 0:
+            intensity_dB = 20.0*np.log10(E_arr / E_max + 1e-16) + 10.0*np.log10(Dmax_val)
+        else:
+            intensity_dB = 20.0*np.log10(E_arr / E_max + 1e-16)
 
         theta_rad = np.deg2rad(theta)
         phi_rad = np.deg2rad(phi)
