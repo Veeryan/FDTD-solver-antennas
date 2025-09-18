@@ -1417,6 +1417,36 @@ class PyVistaMultiAntennaView(ttk.Frame):
             plotter.clear()
         except Exception:
             pass
+        # Ensure the small bottom-left axes actor is removed/disabled
+        try:
+            if hasattr(plotter, 'show_axes'):
+                try:
+                    plotter.show_axes(False)
+                except Exception:
+                    pass
+            a = getattr(plotter, 'axes_actor', None)
+            if a is not None:
+                try:
+                    plotter.remove_actor(a)
+                except Exception:
+                    pass
+                try:
+                    # Fallback remove through renderer
+                    plotter.renderer.RemoveActor(a)
+                except Exception:
+                    pass
+                try:
+                    plotter.axes_actor = None
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # Reset dynamic axes state on a fresh scene
+        self._axis = {
+            'x': {'mesh': None, 'actor': None},
+            'y': {'mesh': None, 'actor': None},
+            'z': {'mesh': None, 'actor': None},
+        }
         # Determine characteristic scene length from patches (used for axis scaling)
         try:
             dims = []
@@ -1551,10 +1581,10 @@ class PyVistaMultiAntennaView(ttk.Frame):
             dist = float(np.linalg.norm(pos - fp))
             va = float(getattr(cam, 'view_angle', 30.0))
             height = 2.0 * dist * math.tan(math.radians(va * 0.5))
-            # Use 35% of current view height, but not smaller than scene_char_len
-            return max(0.75 * self._scene_char_len, 0.35 * height)
+            # Use 55% of current view height, with a generous minimum based on scene size
+            return max(1.1 * self._scene_char_len, 0.55 * height)
         except Exception:
-            return max(0.75 * self._scene_char_len, 0.5)
+            return max(1.1 * self._scene_char_len, 0.8)
 
     def _rescale_origin_axes(self, initial_build=False):
         if not self.available or self._plotter is None:
@@ -1567,23 +1597,13 @@ class PyVistaMultiAntennaView(ttk.Frame):
                 rec = self._axis[axis_key]
                 if rec['mesh'] is None:
                     rec['mesh'] = pv.Line(p0, p1)
-                    rec['actor'] = self._plotter.add_mesh(rec['mesh'], color=color, line_width=5)
+                    rec['actor'] = self._plotter.add_mesh(rec['mesh'], color=color, line_width=6)
                 else:
                     rec['mesh'].points[:] = np.array([p0, p1])
             _ensure('x', (-L,0,0), (L,0,0), (1.0,0.3,0.2))
             _ensure('y', (0,-L,0), (0,L,0), (0.2,1.0,0.3))
             _ensure('z', (0,0,-L), (0,0,L), (0.3,0.5,1.0))
-            # Labels at positive ends
-            try:
-                pts = np.array([[L,0,0],[0,L,0],[0,0,L]])
-                if self._axis['labels_actor'] is not None:
-                    try:
-                        self._plotter.remove_actor(self._axis['labels_actor'])
-                    except Exception:
-                        pass
-                self._axis['labels_actor'] = self._plotter.add_point_labels(pts, ['+X','+Y','+Z'], always=True, font_size=18, text_color='white')
-            except Exception:
-                pass
+            # No labels; keep the view clean since the orientation widget labels axes
             # Render
             if not initial_build:
                 try:
