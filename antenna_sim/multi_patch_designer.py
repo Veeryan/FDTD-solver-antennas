@@ -40,6 +40,7 @@ class MultiPatchPanel(ttk.Frame):
         super().__init__(parent)
         self.patches: List[PatchInstance] = []
         self._current_index: Optional[int] = None
+        self._change_cb = None  # external listener for scene updates
         self._build_ui()
         self._init_axes()
         self._draw_scene()
@@ -132,18 +133,48 @@ class MultiPatchPanel(ttk.Frame):
         mk_row("Rotate Y (°)", self.var_ry, 'ry')
         mk_row("Rotate Z (°)", self.var_rz, 'rz')
 
+        # Display controls
+        disp = ttk.LabelFrame(parent, text="Display")
+        disp.pack(fill='x', padx=10, pady=(0, 10))
+        try:
+            disp.columnconfigure(1, weight=1)
+        except Exception:
+            pass
+        self.var_show_substrate = tk.BooleanVar(value=True)
+        self.var_show_ground = tk.BooleanVar(value=True)
+        self.var_ground_style = tk.StringVar(value='edges')  # 'edges' | 'ring'
+        ttk.Checkbutton(disp, text="Show substrate", variable=self.var_show_substrate, command=self._draw_scene).grid(row=0, column=0, sticky='w')
+        ttk.Checkbutton(disp, text="Show ground", variable=self.var_show_ground, command=self._draw_scene).grid(row=0, column=1, sticky='w', padx=(10,0))
+        ttk.Label(disp, text="Ground style").grid(row=1, column=0, sticky='w')
+        grd = ttk.Combobox(disp, textvariable=self.var_ground_style, state='readonly', values=['edges','ring'])
+        grd.grid(row=1, column=1, sticky='ew')
+        grd.bind('<<ComboboxSelected>>', lambda ev: self._draw_scene())
+
+        # View controls
+        ttk.Button(parent, text="Fit View", command=self._fit_view).pack(fill='x', padx=10, pady=(0, 8))
+
         ttk.Button(parent, text="Apply Changes", command=self._on_apply_changes).pack(fill='x', padx=10, pady=(0, 6))
         ttk.Button(parent, text="Remove Selected", command=self._on_remove_selected).pack(fill='x', padx=10, pady=(0, 6))
         ttk.Label(parent, text="Tip: Rotate with mouse, scroll to zoom.").pack(fill='x', padx=10, pady=(8, 10))
 
     # ---------- Axes and rendering ----------
-    def _init_axes(self):
+    def _init_axes(self, limits: Optional[tuple] = None):
         ax = self.ax
         ax.clear()
-        self._lim = 0.15  # meters -> ~0.3 m span (smaller default view)
-        ax.set_xlim([-self._lim, self._lim])
-        ax.set_ylim([-self._lim, self._lim])
-        ax.set_zlim([-self._lim, self._lim])
+        default_lim = 0.15  # meters -> ~0.3 m span (smaller default view)
+        if limits is None:
+            self._lim = default_lim
+            xlim = (-self._lim, self._lim)
+            ylim = (-self._lim, self._lim)
+            zlim = (-self._lim, self._lim)
+        else:
+            xlim, ylim, zlim = limits
+            # choose an axis line length that covers the current view nicely
+            span = max(xlim[1]-xlim[0], ylim[1]-ylim[0], zlim[1]-zlim[0])
+            self._lim = max(default_lim, 0.5*span)
+        ax.set_xlim(xlim)
+        ax.set_ylim(ylim)
+        ax.set_zlim(zlim)
         try:
             ax.set_box_aspect([1, 1, 1])
         except Exception:
@@ -163,10 +194,15 @@ class MultiPatchPanel(ttk.Frame):
         ax.text(0, 0, L + 0.05, '+Z', color='blue', weight='bold')
 
     def _draw_scene(self):
-        # Preserve view
+        # Preserve view (angles and zoom/pan)
         elev = getattr(self.ax, 'elev', None)
         azim = getattr(self.ax, 'azim', None)
-        self._init_axes()
+        try:
+            xlim = self.ax.get_xlim3d(); ylim = self.ax.get_ylim3d(); zlim = self.ax.get_zlim3d()
+            limits = (xlim, ylim, zlim)
+        except Exception:
+            limits = None
+        self._init_axes(limits)
         for p in self.patches:
             self._draw_patch(p)
         # Restore view if available
@@ -176,6 +212,17 @@ class MultiPatchPanel(ttk.Frame):
         except Exception:
             pass
         self.canvas.draw_idle()
+        # Notify external listeners that the scene changed
+        try:
+            if self._change_cb is not None:
+                self._change_cb(self.patches)
+        except Exception:
+            pass
+
+    def set_change_callback(self, cb):
+        """Register a callback called after the scene redraws.
+        Signature: cb(patches: List[PatchInstance]) -> None"""
+        self._change_cb = cb
 
     def _rotation_matrix(self, rx_deg: float, ry_deg: float, rz_deg: float):
         """Row-vector transform: world = local @ R.
@@ -211,6 +258,15 @@ class MultiPatchPanel(ttk.Frame):
             idx = [idx[0]] + idx[2:]  # drop the top face [4,5,6,7]
         faces = [[rotated[i].tolist() for i in face] for face in idx]
         return faces
+
+    def _box_corners(self, center: np.ndarray, W: float, L: float, H: float, R: np.ndarray) -> np.ndarray:
+        """Return (8,3) array of oriented box corners in world coordinates."""
+        hx, hy, hz = W/2.0, L/2.0, H/2.0
+        corners = np.array([
+            [-hx, -hy, -hz], [ hx, -hy, -hz], [ hx,  hy, -hz], [ -hx,  hy, -hz],
+            [-hx, -hy,  hz], [ hx, -hy,  hz], [ hx,  hy,  hz], [ -hx,  hy,  hz],
+        ])
+        return (corners @ R) + center
 
     def _box_edges(self, center: np.ndarray, W: float, L: float, H: float, R: np.ndarray, which: str = 'top') -> List[List[List[float]]]:
         """Return list of 3D line segments for the rectangle edges of 'top' or 'bottom' face."""
@@ -278,31 +334,45 @@ class MultiPatchPanel(ttk.Frame):
         sub_L = L_m + 2*margin
         sub_W = W_m + 2*margin
 
-        # Substrate (semi-transparent green); leave a visual gap below patch so patch is never hidden
-        # Use a gap proportional to patch size to avoid painter's algorithm artifacts in mplot3d
-        visual_gap = max(8e-4, 0.01 * max(L_m, W_m))  # at least 0.8 mm or 1% of patch size
-        sub_center = C + (np.array([0,0,-(t_patch/2 + visual_gap + h/2)]) @ R)  # shift along local -Z then rotate
-        sub_faces = self._box_faces(sub_center, sub_W, sub_L, h, R, sides_only=True)
-        # Add a top "ring" around the patch so the substrate is visible without covering the patch area
-        ring_faces = self._substrate_top_ring(sub_center, sub_W, sub_L, h, R, inner_W=W_m, inner_L=L_m, ring_gap=visual_gap)
-        sub_faces.extend(ring_faces)
-        substrate = Poly3DCollection(sub_faces, alpha=0.25, facecolor='#3ba56d', edgecolor='#2d7d52', linewidth=0.8)
-        try:
-            substrate.set_zsort('min'); substrate.set_zorder(10)
-        except Exception:
-            pass
-        self.ax.add_collection3d(substrate)
+        # Substrate (semi-transparent green)
+        if getattr(self, 'var_show_substrate', None) is None or self.var_show_substrate.get():
+            # Leave a visual gap below patch so patch is never hidden
+            # Use a gap proportional to patch size to avoid painter's algorithm artifacts in mplot3d
+            visual_gap = max(8e-4, 0.01 * max(L_m, W_m))  # at least 0.8 mm or 1% of patch size
+            sub_center = C + (np.array([0,0,-(t_patch/2 + visual_gap + h/2)]) @ R)  # shift along local -Z then rotate
+            sub_faces = self._box_faces(sub_center, sub_W, sub_L, h, R, sides_only=True)
+            # Add a top "ring" around the patch so the substrate is visible without covering the patch area
+            ring_faces = self._substrate_top_ring(sub_center, sub_W, sub_L, h, R, inner_W=W_m, inner_L=L_m, ring_gap=visual_gap)
+            sub_faces.extend(ring_faces)
+            substrate = Poly3DCollection(sub_faces, alpha=0.25, facecolor='#3ba56d', edgecolor='#2d7d52', linewidth=0.8)
+            try:
+                substrate.set_zsort('min'); substrate.set_zorder(10)
+            except Exception:
+                pass
+            self.ax.add_collection3d(substrate)
 
         # Ground plane (gray), bottom of substrate
-        gnd_center = C + (np.array([0,0,-(t_patch/2 + visual_gap + h + t_ground/2)]) @ R)
-        # Draw only the top edges of the ground plane as wireframe to avoid occluding the patch
-        gnd_edges = self._box_edges(gnd_center, sub_W, sub_L, t_ground, R, which='top')
-        ground = Line3DCollection(gnd_edges, colors='#6b6f73', linewidths=1.0, alpha=0.9)
-        try:
-            ground.set_zorder(5)
-        except Exception:
-            pass
-        self.ax.add_collection3d(ground)
+        if getattr(self, 'var_show_ground', None) is None or self.var_show_ground.get():
+            gnd_center = C + (np.array([0,0,-(t_patch/2 + max(8e-4, 0.01 * max(L_m, W_m)) + h + t_ground/2)]) @ R)
+            ground_style = getattr(self, 'var_ground_style', None).get() if getattr(self, 'var_ground_style', None) else 'edges'
+            if ground_style == 'edges':
+                # Draw only the top edges to avoid occluding the patch
+                gnd_edges = self._box_edges(gnd_center, sub_W, sub_L, t_ground, R, which='top')
+                ground = Line3DCollection(gnd_edges, colors='#b87333', linewidths=1.6, alpha=0.95)
+                try:
+                    ground.set_zorder(5)
+                except Exception:
+                    pass
+                self.ax.add_collection3d(ground)
+            else:
+                # Render a top ring on the ground as a face so it's visible but never occludes patch center
+                g_ring = self._substrate_top_ring(gnd_center, sub_W, sub_L, t_ground, R, inner_W=W_m, inner_L=L_m, ring_gap=max(8e-4, 0.01*max(L_m, W_m)))
+                ground = Poly3DCollection(g_ring, alpha=0.7, facecolor='#b87333', edgecolor='#a35f2d', linewidth=0.8)
+                try:
+                    ground.set_zorder(6)
+                except Exception:
+                    pass
+                self.ax.add_collection3d(ground)
 
         # Patch box (gold), centered at C, thickness symmetric about z=0 (draw last for visibility)
         patch_faces = self._box_faces(C, W_m, L_m, t_patch, R)
@@ -318,19 +388,20 @@ class MultiPatchPanel(ttk.Frame):
             feed_w = calculate_microstrip_width(inst.params.frequency_hz, inst.params.eps_r, inst.params.h_m)
             fw = feed_w
             length = 3*fw
+            t_feed = t_patch
             # Local center of the stub relative to patch center C before rotation
             if inst.feed_direction == FeedDirection.NEG_X:
                 local_center = np.array([-(W_m/2 + length/2), 0.0, 0.0])
-                dims = (length, fw, t_patch)
+                dims = (length, fw, t_feed)
             elif inst.feed_direction == FeedDirection.POS_X:
                 local_center = np.array([(W_m/2 + length/2), 0.0, 0.0])
-                dims = (length, fw, t_patch)
+                dims = (length, fw, t_feed)
             elif inst.feed_direction == FeedDirection.NEG_Y:
                 local_center = np.array([0.0, -(L_m/2 + length/2), 0.0])
-                dims = (fw, length, t_patch)
+                dims = (fw, length, t_feed)
             else:  # POS_Y
                 local_center = np.array([0.0, (L_m/2 + length/2), 0.0])
-                dims = (fw, length, t_patch)
+                dims = (fw, length, t_feed)
             feed_center = C + (local_center @ R)
             faces = self._box_faces(feed_center, dims[0], dims[1], dims[2], R)
             feed = Poly3DCollection(faces, alpha=0.98, facecolor='#ff6f3d', edgecolor='#a74323', linewidth=0.7)
@@ -339,11 +410,67 @@ class MultiPatchPanel(ttk.Frame):
             except Exception:
                 pass
             self.ax.add_collection3d(feed)
+
+            # No overlay; rely on visibility plus motion
         except Exception:
             pass
 
         # Center marker
         self.ax.plot([cx], [cy], [cz], marker='o', color='#ff4081', markersize=4)
+
+    def _fit_view(self):
+        """Adjust axes limits to enclose all patches with a small margin, preserving camera orientation."""
+        try:
+            if not self.patches:
+                self._init_axes()
+                self.canvas.draw_idle()
+                return
+            xs, ys, zs = [], [], []
+            for inst in self.patches:
+                # Geometry parameters
+                if inst.params.patch_length_m and inst.params.patch_width_m:
+                    L_m = inst.params.patch_length_m; W_m = inst.params.patch_width_m
+                else:
+                    L_m, W_m, _ = design_patch_for_frequency(inst.params.frequency_hz, inst.params.eps_r, inst.params.h_m)
+                t_patch = max(35e-6, 0.5e-4)
+                t_ground = 35e-6
+                h = inst.params.h_m
+                C = np.array([inst.center_x_m, inst.center_y_m, inst.center_z_m])
+                R = self._rotation_matrix(inst.rot_x_deg, inst.rot_y_deg, inst.rot_z_deg)
+                margin = 0.35 * max(L_m, W_m)
+                sub_L = L_m + 2*margin
+                sub_W = W_m + 2*margin
+                visual_gap = max(8e-4, 0.01 * max(L_m, W_m))
+                # Include patch, substrate, and ground boxes
+                sub_center = C + (np.array([0,0,-(t_patch/2 + visual_gap + h/2)]) @ R)
+                gnd_center = C + (np.array([0,0,-(t_patch/2 + visual_gap + h + t_ground/2)]) @ R)
+                for (ctr, W, L, H) in [
+                    (C, W_m, L_m, t_patch),
+                    (sub_center, sub_W, sub_L, h),
+                    (gnd_center, sub_W, sub_L, t_ground),
+                ]:
+                    corners = self._box_corners(ctr, W, L, H, R)
+                    xs.extend(corners[:,0]); ys.extend(corners[:,1]); zs.extend(corners[:,2])
+            # Compute limits with padding
+            x_min, x_max = min(xs), max(xs)
+            y_min, y_max = min(ys), max(ys)
+            z_min, z_max = min(zs), max(zs)
+            pad = 0.08 * max(x_max-x_min, y_max-y_min, z_max-z_min)
+            xlim = (x_min - pad, x_max + pad)
+            ylim = (y_min - pad, y_max + pad)
+            zlim = (z_min - pad, z_max + pad)
+            # Preserve camera orientation
+            elev = getattr(self.ax, 'elev', None)
+            azim = getattr(self.ax, 'azim', None)
+            self.ax.set_xlim(xlim); self.ax.set_ylim(ylim); self.ax.set_zlim(zlim)
+            try:
+                if elev is not None and azim is not None:
+                    self.ax.view_init(elev=elev, azim=azim)
+            except Exception:
+                pass
+            self.canvas.draw_idle()
+        except Exception:
+            pass
 
     # ---------- Events ----------
     def _on_scroll(self, event):

@@ -126,7 +126,7 @@ def draw_patch_3d_geometry(L_m: float, W_m: float, h_m: float, fig_size=(8, 6), 
     ax.set_xlabel('x (mm)')
     ax.set_ylabel('y (mm)')
     ax.set_zlabel('z (mm)')
-    ax.set_title('3D Patch Antenna Geometry\n(Gold patch on blue substrate with ground plane)')
+    ax.set_title('3D Patch Antenna Geometry\n(Gold patch on blue substrate with ground plane)', color='white')
     
     # Better viewing angle
     ax.view_init(elev=20, azim=45)
@@ -237,7 +237,7 @@ def draw_microstrip_patch_3d_geometry(L_m: float, W_m: float, h_m: float,
     ax.set_xlabel('X (mm)')
     ax.set_ylabel('Y (mm)')
     ax.set_zlabel('Z (mm)')
-    ax.set_title(f'Microstrip-Fed Patch Antenna\nFeed: {feed_direction.value}, Line Width: {feed_width:.2f} mm')
+    ax.set_title(f'Microstrip-Fed Patch Antenna\nFeed: {feed_direction.value}, Line Width: {feed_width:.2f} mm', color='white')
     
     # Add dimension annotations
     ax.text(0, 0, h*4, f'{W:.1f} mm', ha='center', va='center', color='red', fontweight='bold')

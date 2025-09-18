@@ -428,6 +428,7 @@ class PlotFrame(ttk.Frame):
         self._banner_geom = None
         self._banner_2d = None
         self._banner_3d = None
+        self.vtk_view = None
         self.setup_ui()
         
     def setup_ui(self):
@@ -458,6 +459,14 @@ class PlotFrame(ttk.Frame):
         # 3D Pattern tab
         self.pattern_3d_frame = ttk.Frame(self.notebook, style='Modern.TFrame')
         self.notebook.add(self.pattern_3d_frame, text="3D Pattern")
+
+        # Multi Antenna PyVista (high-fidelity) tab
+        self.multi_pv_tab = ttk.Frame(self.notebook, style='Modern.TFrame')
+        self.notebook.add(self.multi_pv_tab, text="Multi Antenna PyVista")
+        self._pv_placeholder = ttk.Label(self.multi_pv_tab,
+                                          text="Switch to Multi Antenna mode to enable 3D viewer\n(install 'pyvista' if missing)",
+                                          style='Modern.TLabel')
+        self._pv_placeholder.pack(expand=True)
 
         # Add small mode banners at the top of each tab
         self._create_banners()
@@ -545,6 +554,11 @@ class PlotFrame(ttk.Frame):
             except Exception:
                 pass
             self.multi_panel = None
+        # teardown PyVista tab content
+        try:
+            self._clear_pv_tab()
+        except Exception:
+            pass
         self.mode = 'single'
         self._update_mode_buttons()
         self._update_mode_banners()
@@ -574,6 +588,30 @@ class PlotFrame(ttk.Frame):
             from antenna_sim.multi_patch_designer import MultiPatchPanel
             self.multi_panel = MultiPatchPanel(self.geometry_frame)
             self.multi_panel.pack(fill='both', expand=True)
+            # Hook PyVista tab to mirror multi-panel changes
+            self._init_pv_tab()
+            # When main controls change, update PyVista and PV controls list
+            def _on_multi_changed(patches):
+                # Update PyVista view
+                try:
+                    self._update_pv_view(patches)
+                except Exception:
+                    pass
+                # Sync PV controls list/selection if present
+                try:
+                    if getattr(self, 'pv_controls', None) is not None:
+                        self.pv_controls.patches = self.multi_panel.patches  # shared list (same object)
+                        idx = getattr(self.multi_panel, '_current_index', None)
+                        if idx is None:
+                            self.pv_controls._refresh_selector()
+                        else:
+                            self.pv_controls._refresh_selector(select_index=idx)
+                except Exception:
+                    pass
+            try:
+                self.multi_panel.set_change_callback(_on_multi_changed)
+            except Exception:
+                pass
         except Exception as e:
             try:
                 messagebox.showerror("Error", f"Failed to open Multi Antenna view: {e}")
@@ -586,6 +624,19 @@ class PlotFrame(ttk.Frame):
         # show placeholders for patterns while multi-solver isn't wired
         self._show_multi_placeholder('2d')
         self._show_multi_placeholder('3d')
+        # Initial PyVista + PV controls sync
+        try:
+            if self.multi_panel:
+                self._update_pv_view(self.multi_panel.patches)
+                if getattr(self, 'pv_controls', None) is not None:
+                    self.pv_controls.patches = self.multi_panel.patches
+                    idx = getattr(self.multi_panel, '_current_index', None)
+                    if idx is None:
+                        self.pv_controls._refresh_selector()
+                    else:
+                        self.pv_controls._refresh_selector(select_index=idx)
+        except Exception:
+            pass
         if self._mode_changed_cb:
             try:
                 self._mode_changed_cb('multi')
@@ -636,6 +687,688 @@ class PlotFrame(ttk.Frame):
                 self._multi_placeholder_3d = None
         except Exception:
             pass
+
+    # ---- High fidelity PyVista tab helpers ----
+    def _init_pv_tab(self):
+        # If already initialized, keep it
+        if getattr(self, 'pv_view', None) is not None:
+            return
+        # Clear placeholder
+        try:
+            if getattr(self, '_pv_placeholder', None) is not None:
+                self._pv_placeholder.destroy()
+                self._pv_placeholder = None
+        except Exception:
+            pass
+        # Try to create a PyVista view in a split layout (viewer left, controls right)
+        try:
+            # Container for split layout
+            self.pv_split = ttk.Frame(self.multi_pv_tab, style='Modern.TFrame')
+            self.pv_split.pack(fill='both', expand=True)
+            try:
+                self.pv_split.columnconfigure(0, weight=1)
+                self.pv_split.columnconfigure(1, weight=0)
+                self.pv_split.rowconfigure(0, weight=1)
+            except Exception:
+                pass
+
+            # Left: embedded PyVista viewer
+            self.pv_view = PyVistaMultiAntennaView(self.pv_split)
+            if not self.pv_view.available:
+                raise RuntimeError(self.pv_view.error or 'PyVista not available')
+            self.pv_view.grid(row=0, column=0, sticky='nsew')
+
+            # Right: mirrored controls (reuse MultiPatchPanel UI; hide its left figure)
+            try:
+                from antenna_sim.multi_patch_designer import MultiPatchPanel
+                self.pv_controls = MultiPatchPanel(self.pv_split)
+                # Hide the matplotlib figure area of the mirror controls
+                try:
+                    self.pv_controls.left.grid_remove()
+                except Exception:
+                    pass
+                # Place controls in column 1
+                self.pv_controls.grid(row=0, column=1, sticky='ns')
+                # Share the same patch list with the main Geometry panel (if available)
+                try:
+                    if getattr(self, 'multi_panel', None) is not None:
+                        self.pv_controls.patches = self.multi_panel.patches
+                        # Keep selector in sync with the shared list
+                        try:
+                            self.pv_controls._refresh_selector()
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+                # When PV controls change, update both PyVista and Geometry views
+                def _pv_controls_changed(patches):
+                    try:
+                        self._update_pv_view(patches)
+                    except Exception:
+                        pass
+                    try:
+                        if getattr(self, 'multi_panel', None) is not None:
+                            # Redraw the matplotlib scene
+                            self.multi_panel._draw_scene()
+                            # Refresh selector so new/removed patches appear in Geometry panel
+                            try:
+                                prev_idx = getattr(self.multi_panel, '_current_index', None)
+                                # Prefer to keep current selection if still valid; otherwise select last item
+                                sel = prev_idx if (prev_idx is not None and 0 <= prev_idx < len(self.multi_panel.patches)) else (len(self.multi_panel.patches)-1 if self.multi_panel.patches else None)
+                                if sel is None:
+                                    self.multi_panel._refresh_selector()
+                                else:
+                                    self.multi_panel._refresh_selector(select_index=sel)
+                                # Force update combobox values in case ttk doesn't refresh
+                                try:
+                                    names = [p.name for p in self.multi_panel.patches]
+                                    self.multi_panel.sel_combo['values'] = names
+                                    if names:
+                                        self.multi_panel.sel_combo.current(sel if sel is not None else 0)
+                                        self.multi_panel._current_index = (sel if sel is not None else 0)
+                                        self.multi_panel._load_current_into_fields()
+                                except Exception:
+                                    pass
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                try:
+                    self.pv_controls.set_change_callback(_pv_controls_changed)
+                except Exception:
+                    pass
+            except Exception:
+                # Controls are optional; viewer still works
+                self.pv_controls = None
+        except Exception as e:
+            # Show placeholder with instructions
+            msg = (
+                "3D viewer unavailable.\n"
+                "Install with: pip install pyvista pyvistaqt PyQt5\n\n"
+                f"Details: {e}"
+            )
+            self._pv_placeholder = ttk.Label(self.multi_pv_tab, text=msg, style='Modern.TLabel', justify='left')
+            self._pv_placeholder.pack(expand=True)
+            self.pv_view = None
+
+    def _clear_pv_tab(self):
+        # Destroy PyVista child widgets and show placeholder again
+        try:
+            if self.pv_view is not None:
+                self.pv_view.destroy()
+        except Exception:
+            pass
+        self.pv_view = None
+        for child in self.multi_pv_tab.winfo_children():
+            try:
+                child.destroy()
+            except Exception:
+                pass
+        self._pv_placeholder = ttk.Label(self.multi_pv_tab,
+                                          text="Switch to Multi Antenna mode to enable PyVista viewer\n(install 'pyvista' and 'pyvistaqt')",
+                                          style='Modern.TLabel')
+        self._pv_placeholder.pack(expand=True)
+
+    def _update_pv_view(self, patches):
+        try:
+            if self.pv_view is not None and self.pv_view.available:
+                self.pv_view.rebuild(patches)
+        except Exception:
+            pass
+
+    def update_geometry_plot(self, params, solver_type: str = "Simple (Lumped Port)", feed_direction_str: str = "-X"):
+        """Update the single-antenna geometry visualization (Matplotlib).
+        No-op while in multi mode."""
+        try:
+            # If in multi mode, skip single-antenna drawing
+            if getattr(self, 'mode', 'single') == 'multi':
+                return
+            # Clear existing plot
+            if self.geometry_canvas:
+                try:
+                    self.geometry_canvas.get_tk_widget().destroy()
+                except Exception:
+                    pass
+                self.geometry_canvas = None
+
+            # Calculate patch dimensions if not provided
+            from antenna_sim.physics import design_patch_for_frequency
+            if params.patch_length_m and params.patch_width_m:
+                L_m = params.patch_length_m
+                W_m = params.patch_width_m
+            else:
+                L_m, W_m, _ = design_patch_for_frequency(params.frequency_hz, params.eps_r, params.h_m)
+
+            # Create enhanced geometry plot
+            if solver_type == "Microstrip Fed (MSL Port)" or solver_type == "Microstrip Fed (MSL Port, 3D)":
+                # Base geometry
+                geometry_fig = draw_patch_3d_geometry(L_m, W_m, params.h_m, fig_size=(8, 6), show_labels=False)
+                ax_back = geometry_fig.gca()
+                ax_overlay = ax_back
+                # Overlay a simple 50Ω microstrip trace matching FDTD coordinates
+                feed_direction = FeedDirection(feed_direction_str)
+                feed_width_m = calculate_microstrip_width(params.frequency_hz, params.eps_r, params.h_m)
+                feed_width_mm = feed_width_m * 1e3
+                # Substrate outline (same as plotting.py)
+                mm = 1e3
+                L = L_m * mm
+                W = W_m * mm
+                h = params.h_m * mm
+                margin = max(5.0, 0.2 * max(L, W))
+                sub_L = L + 2 * margin
+                sub_W = W + 2 * margin
+                z_plane = 0.02  # slightly above patch plane for visibility
+                if feed_direction == FeedDirection.NEG_X:
+                    feed_start = [-sub_L/2, -feed_width_mm/2, z_plane]
+                    feed_stop  = [-L/2,     +feed_width_mm/2, z_plane]
+                elif feed_direction == FeedDirection.POS_X:
+                    feed_start = [ L/2,     -feed_width_mm/2, z_plane]
+                    feed_stop  = [ sub_L/2, +feed_width_mm/2, z_plane]
+                elif feed_direction == FeedDirection.NEG_Y:
+                    feed_start = [-feed_width_mm/2, -sub_W/2, z_plane]
+                    feed_stop  = [ +feed_width_mm/2, -W/2,   z_plane]
+                else:  # POS_Y
+                    feed_start = [-feed_width_mm/2, W/2,   z_plane]
+                    feed_stop  = [ +feed_width_mm/2, sub_W/2, z_plane]
+                # Draw the microstrip as a small 3D box (prism) for better realism
+                from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+                t = max(0.08, 0.06 * h)  # mm
+                x0, y0 = feed_start[0], feed_start[1]
+                x1, y1 = feed_stop[0], feed_stop[1]
+                z0, z1 = z_plane, z_plane + t
+                if abs(x1 - x0) > abs(y1 - y0):
+                    verts = [
+                        [[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0]],
+                        [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]],
+                        [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]],
+                        [[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]],
+                        [[x0, y0, z0], [x0, y1, z0], [x0, y1, z1], [x0, y0, z1]],
+                        [[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]],
+                    ]
+                else:
+                    verts = [
+                        [[x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [x1, y0, z0]],
+                        [[x0, y0, z1], [x0, y1, z1], [x1, y1, z1], [x1, y0, z1]],
+                        [[x0, y0, z0], [x0, y1, z0], [x0, y1, z1], [x0, y0, z1]],
+                        [[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]],
+                        [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]],
+                        [[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]],
+                    ]
+                strip = Poly3DCollection(verts, alpha=0.99, facecolor='#ff6f3d', edgecolor='#a74323', linewidth=0.9)
+                try:
+                    strip.set_zsort('max')
+                except Exception:
+                    pass
+                strip.set_zorder(10)
+                ax_overlay.add_collection3d(strip)
+                # Patch top cap overlay
+                patch_thickness = max(0.08, 0.06 * h)
+                patch_cap = Poly3DCollection([[[-L/2, -W/2, patch_thickness], [L/2, -W/2, patch_thickness], [L/2, W/2, patch_thickness], [-L/2, W/2, patch_thickness]]],
+                                             alpha=1.0, facecolor='#ffd24d', edgecolor='#b8860b', linewidth=0.9)
+                try:
+                    patch_cap.set_zsort('max')
+                except Exception:
+                    pass
+                patch_cap.set_zorder(12)
+                ax_overlay.add_collection3d(patch_cap)
+                ax_main = ax_back
+            else:
+                geometry_fig = draw_patch_3d_geometry(L_m, W_m, params.h_m, fig_size=(8, 6), show_labels=True)
+                ax_overlay = None
+                ax_main = geometry_fig.gca()
+
+            # Style
+            ax = geometry_fig.gca()
+            geometry_fig.patch.set_facecolor('#2b2b2b')
+            ax.set_facecolor('#2b2b2b')
+            ax.tick_params(colors='white')
+            ax.xaxis.label.set_color('white')
+            ax.yaxis.label.set_color('white')
+            ax.zaxis.label.set_color('white')
+            ax.xaxis.pane.fill = False
+            ax.yaxis.pane.fill = False
+            ax.zaxis.pane.fill = False
+            ax.grid(True, alpha=0.3)
+
+            # Ensure title is readable on dark theme
+            try:
+                current_title = ax.get_title()
+                if current_title:
+                    ax.set_title(current_title, color='white', fontsize=12, pad=20)
+            except Exception:
+                pass
+
+            geometry_fig.tight_layout()
+
+            # Add to GUI
+            self.geometry_canvas = FigureCanvasTkAgg(geometry_fig, self.geometry_frame)
+            self.geometry_canvas.get_tk_widget().pack(fill='both', expand=True)
+            self.geometry_canvas.draw()
+            self._geom_ax = ax
+            self._geom_canvas = self.geometry_canvas
+
+            def _on_scroll(event):
+                try:
+                    factor = 0.9 if event.button == 'up' else 1.1
+                    xlim = ax.get_xlim(); ylim = ax.get_ylim(); zlim = ax.get_zlim()
+                    def _scale(lims):
+                        c = 0.5*(lims[0]+lims[1]); r = 0.5*(lims[1]-lims[0]); r *= factor; return (c-r, c+r)
+                    ax.set_xlim(_scale(xlim)); ax.set_ylim(_scale(ylim)); ax.set_zlim(_scale(zlim))
+                    self.geometry_canvas.draw_idle()
+                except Exception:
+                    pass
+            geometry_fig.canvas.mpl_connect('scroll_event', _on_scroll)
+
+            self.geometry_canvas.get_tk_widget().update_idletasks()
+
+        except Exception as e:
+            print(f"❌ ERROR updating geometry plot: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def update_2d_patterns(self, theta, intensity):
+        """Update 2D plots. No-op while in multi mode (placeholder shown)."""
+        try:
+            if getattr(self, 'mode', 'single') == 'multi':
+                self._show_multi_placeholder('2d')
+                return
+            self._hide_multi_placeholder('2d')
+            if self.pattern_2d_canvas:
+                self.pattern_2d_canvas.get_tk_widget().destroy()
+            if intensity.ndim == 2 and intensity.shape[1] >= 2:
+                th_deg = np.rad2deg(theta)
+                E_plane = intensity[:, 0]
+                H_plane = intensity[:, 1] if intensity.shape[1] > 1 else intensity[:, 0]
+                th_full = np.concatenate([th_deg, th_deg[1:] + 180])
+                E_full = np.concatenate([E_plane, E_plane[1:][::-1]])
+                H_full = np.concatenate([H_plane, H_plane[1:][::-1]])
+                th_closed = np.concatenate([th_full, [360.0]])
+                E_closed = np.concatenate([E_full, [E_full[0]]])
+                H_closed = np.concatenate([H_full, [H_full[0]]])
+                fig = Figure(figsize=(16, 8), facecolor='#2b2b2b')
+                ax1 = fig.add_subplot(121, projection='polar', facecolor='#2b2b2b')
+                ax2 = fig.add_subplot(122, projection='polar', facecolor='#2b2b2b')
+                ax1.plot(np.deg2rad(th_closed), E_closed, 'r-', linewidth=3, label='E-plane (phi=0°)')
+                ax1.set_title('E-plane (ZX, phi=0°)', fontsize=14, pad=25, color='white')
+                ax1.set_theta_zero_location('N'); ax1.set_theta_direction(-1); ax1.grid(True, alpha=0.3)
+                ax1.set_ylim([max(-20, np.min(E_full)-2), np.max(E_full)+2]); ax1.tick_params(colors='white')
+                ax1.set_thetagrids([0,45,90,135,180,225,270,315], ["0°\n(+Z)","45°","90°\n(+X)","135°","180°\n(-Z)","225°","270°\n(-X)","315°"])
+                ax2.plot(np.deg2rad(th_closed), H_closed, 'b-', linewidth=3, label='H-plane (phi=90°)')
+                ax2.set_title('H-plane (YZ, phi=90°)', fontsize=14, pad=25, color='white')
+                ax2.set_theta_zero_location('N'); ax2.set_theta_direction(-1); ax2.grid(True, alpha=0.3)
+                ax2.set_ylim([max(-20, np.min(H_full)-2), np.max(H_full)+2]); ax2.tick_params(colors='white')
+                ax2.set_thetagrids([0,45,90,135,180,225,270,315], ["0°\n(+Z)","45°","90°\n(+Y)","135°","180°\n(-Z)","225°","270°\n(-Y)","315°"])
+                fig.tight_layout()
+                self.pattern_2d_canvas = FigureCanvasTkAgg(fig, self.pattern_2d_frame)
+                self.pattern_2d_canvas.get_tk_widget().pack(fill='both', expand=True); self.pattern_2d_canvas.draw()
+            else:
+                print(f"Data shape: {intensity.shape} - Cannot extract plane cuts")
+        except Exception as e:
+            print(f"Error updating 2D patterns: {e}")
+            import traceback; traceback.print_exc()
+
+    def update_3d_pattern(self, theta, phi, intensity, params):
+        """Update 3D plot. No-op while in multi mode (placeholder shown)."""
+        try:
+            if getattr(self, 'mode', 'single') == 'multi':
+                self._show_multi_placeholder('3d'); return
+            self._hide_multi_placeholder('3d')
+            if self.pattern_3d_canvas:
+                self.pattern_3d_canvas.get_tk_widget().destroy()
+            if intensity.ndim == 2 and intensity.shape[1] >= 2:
+                th_deg = np.rad2deg(theta)
+                E_plane_data = intensity[:, 0]
+                H_plane_data = intensity[:, 1]
+                phi_full = np.linspace(0, 2*np.pi, 73)
+                pattern_3d = np.zeros((len(theta), len(phi_full)))
+                for i, phi_val in enumerate(phi_full):
+                    phi_norm = (phi_val % (2*np.pi))
+                    if phi_norm <= np.pi/2:
+                        weight = phi_norm / (np.pi/2); pattern_3d[:, i] = (1-weight) * E_plane_data + weight * H_plane_data
+                    elif phi_norm <= np.pi:
+                        weight = (phi_norm - np.pi/2) / (np.pi/2); pattern_3d[:, i] = (1-weight) * H_plane_data + weight * E_plane_data
+                    elif phi_norm <= 3*np.pi/2:
+                        weight = (phi_norm - np.pi) / (np.pi/2); pattern_3d[:, i] = (1-weight) * E_plane_data + weight * H_plane_data
+                    else:
+                        weight = (phi_norm - 3*np.pi/2) / (np.pi/2); pattern_3d[:, i] = (1-weight) * H_plane_data + weight * E_plane_data
+                TH, PH = np.meshgrid(theta, phi_full, indexing='ij')
+                pattern_norm = pattern_3d - np.max(pattern_3d)
+                pattern_linear = np.maximum(0.01, 10**(pattern_norm/20))
+                X = pattern_linear * np.sin(TH) * np.cos(PH)
+                Y = pattern_linear * np.sin(TH) * np.sin(PH)
+                Z = pattern_linear * np.cos(TH)
+                fig_3d = Figure(figsize=(8, 6), facecolor='#2b2b2b')
+                ax_3d = fig_3d.add_subplot(111, projection='3d'); ax_3d.set_facecolor('#2b2b2b')
+                surf = ax_3d.plot_surface(
+                    X, Y, Z,
+                    facecolors=plt.cm.jet((pattern_3d - np.min(pattern_3d)) / (np.max(pattern_3d) - np.min(pattern_3d))),
+                    linewidth=0, antialiased=True, alpha=0.8,
+                )
+                ax_3d.tick_params(colors='white'); ax_3d.xaxis.pane.fill = False; ax_3d.yaxis.pane.fill = False; ax_3d.zaxis.pane.fill = False
+                max_range = 1.2
+                ax_3d.set_xlim([-max_range, max_range]); ax_3d.set_ylim([-max_range, max_range]); ax_3d.set_zlim([-1.1, max_range])
+                ax_3d.view_init(elev=20, azim=-60)
+                fig_3d.tight_layout()
+                self.pattern_3d_canvas = FigureCanvasTkAgg(fig_3d, self.pattern_3d_frame)
+                self.pattern_3d_canvas.get_tk_widget().pack(fill='both', expand=True); self.pattern_3d_canvas.draw()
+                self._p3d_ax = ax_3d; self._p3d_canvas = self.pattern_3d_canvas
+                def _on_scroll_3d(event):
+                    try:
+                        factor = 0.9 if event.button == 'up' else 1.1
+                        xlim = ax_3d.get_xlim(); ylim = ax_3d.get_ylim(); zlim = ax_3d.get_zlim()
+                        def _scale(lims):
+                            c = 0.5*(lims[0]+lims[1]); r = 0.5*(lims[1]-lims[0]); r *= factor; return (c-r, c+r)
+                        ax_3d.set_xlim(_scale(xlim)); ax_3d.set_ylim(_scale(ylim)); ax_3d.set_zlim(_scale(zlim))
+                        self.pattern_3d_canvas.draw_idle()
+                    except Exception:
+                        pass
+                fig_3d.canvas.mpl_connect('scroll_event', _on_scroll_3d)
+            else:
+                print("Cannot create 3D plot: insufficient data dimensions")
+        except Exception as e:
+            print(f"Error updating 3D pattern: {e}")
+            import traceback; traceback.print_exc()
+
+
+# ===== High-fidelity PyVista view (embedded via VTK) =====
+class PyVistaMultiAntennaView(ttk.Frame):
+    """Embedded high-fidelity 3D view using a PyVista Plotter hosted in a Tk widget.
+
+    Renders inside the tab so you can compare side-by-side with Matplotlib Geometry.
+    """
+
+    def __init__(self, parent):
+        super().__init__(parent, style='Modern.TFrame')
+        self.available = False
+        self.error = None
+        self._iren_widget = None
+        self._camera_snapshot = None
+        self._latest_patches = []
+        self._pv_plotter = None
+        self._plotter = None  # embedded BackgroundPlotter (Qt window reparented into Tk)
+        try:
+            import pyvista as pv
+            from pyvistaqt import QtInteractor
+            import ctypes
+            try:
+                from PyQt5.QtWidgets import QApplication
+            except Exception:
+                try:
+                    from PySide2.QtWidgets import QApplication
+                except Exception:
+                    QApplication = None
+
+            # Theme
+            try:
+                pv.global_theme.background = '#2b2b2b'
+                pv.global_theme.foreground = 'white'
+                pv.global_theme.edge_color = 'black'
+            except Exception:
+                pass
+
+            # Host frame inside this tab for embedding the Qt window
+            self.host = ttk.Frame(self, style='Modern.TFrame')
+            self.host.pack(fill='both', expand=True)
+            self.update_idletasks()
+
+            # Create a PyVistaQt QtInteractor (QWidget) and show to realize native window
+            self._plotter = QtInteractor(None)
+            try:
+                self._plotter.show()
+            except Exception:
+                pass
+
+            # Reparent Qt widget into this Tk frame (Windows only) and strip window chrome
+            try:
+                self._hwnd_tk = int(self.host.winfo_id())
+                self._hwnd_qt = int(self._plotter.winId())
+                user32 = ctypes.windll.user32
+                self._user32 = user32
+                GWL_STYLE = -16
+                WS_CHILD = 0x40000000
+                WS_VISIBLE = 0x10000000
+                WS_CLIPSIBLINGS = 0x04000000
+                WS_CLIPCHILDREN = 0x02000000
+                WS_POPUP = 0x80000000
+                WS_CAPTION = 0x00C00000
+                WS_THICKFRAME = 0x00040000
+                WS_MINIMIZEBOX = 0x00020000
+                WS_MAXIMIZEBOX = 0x00010000
+                WS_SYSMENU = 0x00080000
+                WS_BORDER = 0x00800000
+                # Set child window style and parent
+                try:
+                    style = user32.GetWindowLongPtrW(self._hwnd_qt, GWL_STYLE)
+                    style &= ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU | WS_BORDER)
+                    style |= (WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_VISIBLE)
+                    user32.SetWindowLongPtrW(self._hwnd_qt, GWL_STYLE, style)
+                except Exception:
+                    try:
+                        style = user32.GetWindowLongW(self._hwnd_qt, GWL_STYLE)
+                        style &= ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU | WS_BORDER)
+                        style |= (WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_VISIBLE)
+                        user32.SetWindowLongW(self._hwnd_qt, GWL_STYLE, style)
+                    except Exception:
+                        pass
+                user32.SetParent(self._hwnd_qt, self._hwnd_tk)
+                # Apply style changes
+                try:
+                    SWP_NOSIZE = 0x0001; SWP_NOMOVE = 0x0002; SWP_NOZORDER = 0x0004; SWP_FRAMECHANGED = 0x0020
+                    user32.SetWindowPos(self._hwnd_qt, 0, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED)
+                except Exception:
+                    pass
+                # Fit the child to host size
+                def _resize(ev=None):
+                    try:
+                        w = max(1, self.host.winfo_width()); h = max(1, self.host.winfo_height())
+                        user32.MoveWindow(self._hwnd_qt, 0, 0, int(w), int(h), True)
+                    except Exception:
+                        pass
+                self.host.bind('<Configure>', _resize)
+                _resize()
+            except Exception:
+                pass
+
+            # Initial axes corner widget
+            try:
+                self._plotter.add_axes()
+                self._plotter.enable_anti_aliasing()
+            except Exception:
+                pass
+
+            # Periodically pump Qt events so the embedded window stays responsive
+            self._qt_app = None
+            try:
+                if QApplication is not None:
+                    self._qt_app = QApplication.instance() or QApplication([])
+            except Exception:
+                pass
+            def _pump_qt():
+                try:
+                    if self._qt_app is not None:
+                        self._qt_app.processEvents()
+                except Exception:
+                    pass
+                try:
+                    self.after(16, _pump_qt)
+                except Exception:
+                    pass
+            _pump_qt()
+            self.available = True
+        except Exception as e:
+            self.error = str(e)
+            ttk.Label(self, text=f"3D viewer unavailable: {e}", style='Modern.TLabel').pack(expand=True)
+
+    # ---- Utilities ----
+    @staticmethod
+    def _rot_matrix(rx_deg: float, ry_deg: float, rz_deg: float):
+        rx, ry, rz = np.deg2rad([rx_deg, ry_deg, rz_deg])
+        cx, sx = np.cos(rx), np.sin(rx)
+        cy, sy = np.cos(ry), np.sin(ry)
+        cz, sz = np.cos(rz), np.sin(rz)
+        Rx = np.array([[1, 0, 0], [0, cx, -sx], [0, sx, cx]])
+        Ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]])
+        Rz = np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]])
+        return Rx @ Ry @ Rz
+
+    # ---- External PyVista fallback ----
+    def _open_or_focus_external(self):
+        try:
+            import pyvista as pv
+            from pyvistaqt import BackgroundPlotter
+            if self._plotter is None:
+                self._plotter = BackgroundPlotter(title='Multi Antenna (PyVista)', auto_update=True)
+            else:
+                try:
+                    self._plotter.show()
+                except Exception:
+                    pass
+            # Rebuild with latest patches
+            self.rebuild(self._latest_patches)
+        except Exception:
+            pass
+
+    def _pv_box(self, plotter, dims_xyz, center_world, angles_xyz_deg, color_rgb=(1,1,1), opacity=1.0, show_edges=False):
+        try:
+            import pyvista as pv
+            # Build oriented box corners exactly like MultiPatchPanel
+            W, L, H = float(dims_xyz[0]), float(dims_xyz[1]), float(dims_xyz[2])
+            hx, hy, hz = W/2.0, L/2.0, H/2.0
+            local = np.array([
+                [-hx, -hy, -hz], [ hx, -hy, -hz], [ hx,  hy, -hz], [ -hx,  hy, -hz],
+                [-hx, -hy,  hz], [ hx, -hy,  hz], [ hx,  hy,  hz], [ -hx,  hy,  hz],
+            ])
+            rx, ry, rz = angles_xyz_deg
+            R = self._rot_matrix(rx, ry, rz)
+            corners = (local @ R) + np.array(center_world)
+            # Faces connectivity (6 quads)
+            faces = np.hstack([
+                [4, 0,1,2,3],
+                [4, 4,5,6,7],
+                [4, 0,1,5,4],
+                [4, 3,2,6,7],
+                [4, 0,3,7,4],
+                [4, 1,2,6,5],
+            ]).astype(np.int64)
+            mesh = pv.PolyData(corners, faces)
+            plotter.add_mesh(mesh, color=color_rgb, opacity=float(opacity), show_edges=show_edges)
+        except Exception:
+            pass
+
+    def _build_scene_pyvista(self, plotter, patches):
+        try:
+            plotter.clear()
+        except Exception:
+            pass
+        # Axes: corner triad and origin lines with labels
+        try:
+            plotter.add_axes()
+            # Determine a generous axis length from geometry
+            axis_len = 0.5
+            try:
+                dims = []  # characteristic lengths per instance
+                for inst in patches or []:
+                    if inst.params.patch_length_m and inst.params.patch_width_m:
+                        dims.append(max(inst.params.patch_length_m, inst.params.patch_width_m))
+                    else:
+                        from antenna_sim.physics import design_patch_for_frequency
+                        L_m, W_m, _ = design_patch_for_frequency(inst.params.frequency_hz, inst.params.eps_r, inst.params.h_m)
+                        dims.append(max(L_m, W_m))
+                if dims:
+                    axis_len = 1.8 * max(dims)  # extend well beyond geometry
+            except Exception:
+                pass
+            import pyvista as pv
+            line_x = pv.Line((-axis_len,0,0), (axis_len,0,0)); plotter.add_mesh(line_x, color=(1.0,0.3,0.2), line_width=5)
+            line_y = pv.Line((0,-axis_len,0), (0,axis_len,0)); plotter.add_mesh(line_y, color=(0.2,1.0,0.3), line_width=5)
+            line_z = pv.Line((0,0,-axis_len), (0,0,axis_len)); plotter.add_mesh(line_z, color=(0.3,0.5,1.0), line_width=5)
+            pts = np.array([[axis_len,0,0],[0,axis_len,0],[0,0,axis_len]])
+            plotter.add_point_labels(pts, ['+X','+Y','+Z'], always=True, font_size=18, text_color='white')
+        except Exception:
+            pass
+        color_sub = (0.23, 0.65, 0.43)
+        color_gnd = (0.72, 0.45, 0.20)
+        color_patch = (1.0, 0.83, 0.30)
+        color_feed = (1.0, 0.43, 0.24)
+        for inst in patches or []:
+            try:
+                if inst.params.patch_length_m and inst.params.patch_width_m:
+                    L_m = inst.params.patch_length_m; W_m = inst.params.patch_width_m
+                else:
+                    from antenna_sim.physics import design_patch_for_frequency
+                    L_m, W_m, _ = design_patch_for_frequency(inst.params.frequency_hz, inst.params.eps_r, inst.params.h_m)
+                t_patch = max(35e-6, 0.5e-4)
+                t_ground = 35e-6
+                h = inst.params.h_m
+                C = np.array([inst.center_x_m, inst.center_y_m, inst.center_z_m])
+                angles = (inst.rot_x_deg, inst.rot_y_deg, inst.rot_z_deg)
+                R = self._rot_matrix(*angles)
+                margin = 0.35 * max(L_m, W_m)
+                sub_L = L_m + 2*margin
+                sub_W = W_m + 2*margin
+                sub_center = C + (np.array([0,0,-(t_patch/2 + h/2)]) @ R)
+                self._pv_box(plotter, (sub_W, sub_L, h), sub_center, angles, color_rgb=color_sub, opacity=1.0, show_edges=True)
+                gnd_center = C + (np.array([0,0,-(t_patch/2 + h + t_ground/2)]) @ R)
+                self._pv_box(plotter, (sub_W, sub_L, t_ground), gnd_center, angles, color_rgb=color_gnd, opacity=0.98, show_edges=False)
+                self._pv_box(plotter, (W_m, L_m, t_patch), C, angles, color_rgb=color_patch, opacity=1.0, show_edges=False)
+                from antenna_sim.solver_fdtd_openems_microstrip import calculate_microstrip_width, FeedDirection
+                fw = calculate_microstrip_width(inst.params.frequency_hz, inst.params.eps_r, inst.params.h_m)
+                length = 3*fw
+                if inst.feed_direction == FeedDirection.NEG_X:
+                    local_center = np.array([-(W_m/2 + length/2), 0.0, 0.0]); dims = (length, fw, t_patch)
+                elif inst.feed_direction == FeedDirection.POS_X:
+                    local_center = np.array([(W_m/2 + length/2), 0.0, 0.0]); dims = (length, fw, t_patch)
+                elif inst.feed_direction == FeedDirection.NEG_Y:
+                    local_center = np.array([0.0, -(L_m/2 + length/2), 0.0]); dims = (fw, length, t_patch)
+                else:
+                    local_center = np.array([0.0, (L_m/2 + length/2), 0.0]); dims = (fw, length, t_patch)
+                feed_center = C + (local_center @ R)
+                self._pv_box(plotter, dims, feed_center, angles, color_rgb=color_feed, opacity=0.98, show_edges=False)
+            except Exception:
+                pass
+        try:
+            plotter.reset_camera()
+        except Exception:
+            pass
+
+    def rebuild(self, patches):
+        self._latest_patches = patches
+        if not self.available or self._plotter is None:
+            return
+        # Save camera
+        try:
+            self._camera_snapshot = tuple(self._plotter.camera_position)
+        except Exception:
+            self._camera_snapshot = None
+
+        # Build scene with PyVista
+        try:
+            self._build_scene_pyvista(self._plotter, patches)
+        except Exception:
+            pass
+
+        # Restore camera
+        try:
+            if self._camera_snapshot is None:
+                self._plotter.reset_camera()
+            else:
+                self._plotter.camera_position = self._camera_snapshot
+        except Exception:
+            pass
+
+        # Render
+        try:
+            self._plotter.render()
+        except Exception:
+            pass
+
+    def destroy(self):
+        try:
+            if self._iren_widget is not None:
+                self._iren_widget.Destroy()
+        except Exception:
+            pass
+        super().destroy()
         
     def open_multi_patch(self):
         """Open the Multi Patch Designer window."""
