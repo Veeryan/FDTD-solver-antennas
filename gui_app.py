@@ -114,105 +114,106 @@ class ParameterFrame(ttk.Frame):
     """Frame for antenna parameters input"""
     
     def __init__(self, parent, style_class):
-        super().__init__(parent, style='Card.TFrame')
+        # Use default ttk styling to match Multi Patch Controls look
+        super().__init__(parent)
         self.style_class = style_class
         self.setup_ui()
         
     def setup_ui(self):
-        # Header
-        header = ttk.Label(self, text="📐 Antenna Parameters", style='Header.TLabel')
+        # Header (match Multi Patch Controls: bold plain ttk)
+        header = ttk.Label(self, text="📐 Single Patch Controls", font=("Segoe UI", 12, "bold"))
         header.pack(fill='x', padx=10, pady=(10, 5))
         
         # Parameters frame
-        params_frame = ttk.Frame(self, style='Modern.TFrame')
+        params_frame = ttk.Frame(self)
         params_frame.pack(fill='both', expand=True, padx=10, pady=5)
         
         # Create parameter inputs
         self.vars = {}
         
         # Row 0: Frequency
-        ttk.Label(params_frame, text="Frequency (GHz):", style='Modern.TLabel').grid(row=0, column=0, sticky='w', pady=2)
+        ttk.Label(params_frame, text="Frequency (GHz):").grid(row=0, column=0, sticky='w', pady=2)
         self.vars['frequency'] = tk.DoubleVar(value=2.45)
-        freq_entry = ttk.Entry(params_frame, textvariable=self.vars['frequency'], style='Modern.TEntry', width=15)
+        freq_entry = ttk.Entry(params_frame, textvariable=self.vars['frequency'], width=15)
         freq_entry.grid(row=0, column=1, sticky='ew', padx=(5, 0), pady=2)
         
         # Row 1: Dielectric constant
-        ttk.Label(params_frame, text="Dielectric εr:", style='Modern.TLabel').grid(row=1, column=0, sticky='w', pady=2)
+        ttk.Label(params_frame, text="Dielectric εr:").grid(row=1, column=0, sticky='w', pady=2)
         self.vars['eps_r'] = tk.DoubleVar(value=4.3)
-        eps_entry = ttk.Entry(params_frame, textvariable=self.vars['eps_r'], style='Modern.TEntry', width=15)
+        eps_entry = ttk.Entry(params_frame, textvariable=self.vars['eps_r'], width=15)
         eps_entry.grid(row=1, column=1, sticky='ew', padx=(5, 0), pady=2)
         
         # Row 2: Substrate thickness
-        ttk.Label(params_frame, text="Thickness h (mm):", style='Modern.TLabel').grid(row=2, column=0, sticky='w', pady=2)
+        ttk.Label(params_frame, text="Thickness h (mm):").grid(row=2, column=0, sticky='w', pady=2)
         self.vars['thickness'] = tk.DoubleVar(value=1.6)
-        thick_entry = ttk.Entry(params_frame, textvariable=self.vars['thickness'], style='Modern.TEntry', width=15)
+        thick_entry = ttk.Entry(params_frame, textvariable=self.vars['thickness'], width=15)
         thick_entry.grid(row=2, column=1, sticky='ew', padx=(5, 0), pady=2)
         
         # Row 3: Loss tangent
-        ttk.Label(params_frame, text="Loss tangent:", style='Modern.TLabel').grid(row=3, column=0, sticky='w', pady=2)
+        ttk.Label(params_frame, text="Loss tangent:").grid(row=3, column=0, sticky='w', pady=2)
         self.vars['loss_tan'] = tk.DoubleVar(value=0.02)
-        loss_entry = ttk.Entry(params_frame, textvariable=self.vars['loss_tan'], style='Modern.TEntry', width=15)
+        loss_entry = ttk.Entry(params_frame, textvariable=self.vars['loss_tan'], width=15)
         loss_entry.grid(row=3, column=1, sticky='ew', padx=(5, 0), pady=2)
         
         # Row 4: Metal selection
-        ttk.Label(params_frame, text="Metal:", style='Modern.TLabel').grid(row=4, column=0, sticky='w', pady=2)
+        ttk.Label(params_frame, text="Metal:").grid(row=4, column=0, sticky='w', pady=2)
         self.vars['metal'] = tk.StringVar(value=Metal.COPPER.value)
-        metal_combo = ttk.Combobox(params_frame, textvariable=self.vars['metal'], style='Modern.TCombobox', width=12)
+        metal_combo = ttk.Combobox(params_frame, textvariable=self.vars['metal'], width=12)
         metal_combo['values'] = [m.value for m in Metal]
         metal_combo.grid(row=4, column=1, sticky='ew', padx=(5, 0), pady=2)
         metal_combo.state(['readonly'])
         
         # Row 5: Solver type selection
-        ttk.Label(params_frame, text="Solver Type:", style='Modern.TLabel').grid(row=5, column=0, sticky='w', pady=2)
+        ttk.Label(params_frame, text="Solver Type:").grid(row=5, column=0, sticky='w', pady=2)
         self.vars['solver_type'] = tk.StringVar(value="Simple (Lumped Port)")
-        solver_combo = ttk.Combobox(params_frame, textvariable=self.vars['solver_type'], style='Modern.TCombobox', width=20)
+        solver_combo = ttk.Combobox(params_frame, textvariable=self.vars['solver_type'], width=20)
         solver_combo['values'] = ["Simple (Lumped Port)", "Microstrip Fed (MSL Port)", "Microstrip Fed (MSL Port, 3D)"]
         solver_combo.grid(row=5, column=1, sticky='ew', padx=(5, 0), pady=2)
         solver_combo.state(['readonly'])
         solver_combo.bind('<<ComboboxSelected>>', self.on_solver_type_change)
         
         # Row 6: Feed direction (only for microstrip)
-        self.feed_dir_label = ttk.Label(params_frame, text="Feed Direction:", style='Modern.TLabel')
+        self.feed_dir_label = ttk.Label(params_frame, text="Feed Direction:")
         self.feed_dir_label.grid(row=6, column=0, sticky='w', pady=2)
         self.vars['feed_direction'] = tk.StringVar(value="-X")
-        self.feed_dir_combo = ttk.Combobox(params_frame, textvariable=self.vars['feed_direction'], style='Modern.TCombobox', width=12)
+        self.feed_dir_combo = ttk.Combobox(params_frame, textvariable=self.vars['feed_direction'], width=12)
         self.feed_dir_combo['values'] = ["-X", "+X", "-Y", "+Y"]
         self.feed_dir_combo.grid(row=6, column=1, sticky='ew', padx=(5, 0), pady=2)
         self.feed_dir_combo.state(['readonly'])
         
         # Row 7: Boundary type
-        ttk.Label(params_frame, text="Boundary:", style='Modern.TLabel').grid(row=7, column=0, sticky='w', pady=2)
+        ttk.Label(params_frame, text="Boundary:").grid(row=7, column=0, sticky='w', pady=2)
         self.vars['boundary'] = tk.StringVar(value="MUR")
-        boundary_combo = ttk.Combobox(params_frame, textvariable=self.vars['boundary'], style='Modern.TCombobox', width=12)
+        boundary_combo = ttk.Combobox(params_frame, textvariable=self.vars['boundary'], width=12)
         boundary_combo['values'] = ["MUR", "PML_8"]
         boundary_combo.grid(row=7, column=1, sticky='ew', padx=(5,0), pady=2)
         boundary_combo.state(['readonly'])
 
         # Row 8: Theta/Phi sampling (for 3D)
-        ttk.Label(params_frame, text="θ step (deg):", style='Modern.TLabel').grid(row=8, column=0, sticky='w', pady=2)
+        ttk.Label(params_frame, text="θ step (deg):").grid(row=8, column=0, sticky='w', pady=2)
         self.vars['theta_step'] = tk.DoubleVar(value=2.0)
-        ttk.Entry(params_frame, textvariable=self.vars['theta_step'], style='Modern.TEntry', width=12).grid(row=8, column=1, sticky='w', padx=(5,0), pady=2)
+        ttk.Entry(params_frame, textvariable=self.vars['theta_step'], width=12).grid(row=8, column=1, sticky='w', padx=(5,0), pady=2)
 
-        ttk.Label(params_frame, text="φ step (deg):", style='Modern.TLabel').grid(row=9, column=0, sticky='w', pady=2)
+        ttk.Label(params_frame, text="φ step (deg):").grid(row=9, column=0, sticky='w', pady=2)
         self.vars['phi_step'] = tk.DoubleVar(value=5.0)
-        ttk.Entry(params_frame, textvariable=self.vars['phi_step'], style='Modern.TEntry', width=12).grid(row=9, column=1, sticky='w', padx=(5,0), pady=2)
+        ttk.Entry(params_frame, textvariable=self.vars['phi_step'], width=12).grid(row=9, column=1, sticky='w', padx=(5,0), pady=2)
 
         # Row 10: Normalization toggle
-        ttk.Label(params_frame, text="3D scale:", style='Modern.TLabel').grid(row=10, column=0, sticky='w', pady=2)
+        ttk.Label(params_frame, text="3D scale:").grid(row=10, column=0, sticky='w', pady=2)
         self.vars['norm_mode'] = tk.StringVar(value="dBi")
-        norm_combo = ttk.Combobox(params_frame, textvariable=self.vars['norm_mode'], style='Modern.TCombobox', width=12)
+        norm_combo = ttk.Combobox(params_frame, textvariable=self.vars['norm_mode'], width=12)
         norm_combo['values'] = ["dBi", "Normalized"]
         norm_combo.grid(row=10, column=1, sticky='ew', padx=(5,0), pady=2)
         norm_combo.state(['readonly'])
 
         # Row 11: openEMS DLL path
-        ttk.Label(params_frame, text="openEMS DLL:", style='Modern.TLabel').grid(row=11, column=0, sticky='w', pady=2)
+        ttk.Label(params_frame, text="openEMS DLL:").grid(row=11, column=0, sticky='w', pady=2)
         self.vars['dll_path'] = tk.StringVar(value=os.path.abspath("openEMS"))
-        dll_frame = ttk.Frame(params_frame, style='Modern.TFrame')
+        dll_frame = ttk.Frame(params_frame)
         dll_frame.grid(row=11, column=1, sticky='ew', padx=(5, 0), pady=2)
         dll_frame.columnconfigure(0, weight=1)
         
-        dll_entry = ttk.Entry(dll_frame, textvariable=self.vars['dll_path'], style='Modern.TEntry')
+        dll_entry = ttk.Entry(dll_frame, textvariable=self.vars['dll_path'])
         dll_entry.grid(row=0, column=0, sticky='ew')
         
         browse_btn = ttk.Button(dll_frame, text="...", width=3, command=self.browse_dll_path)
@@ -467,6 +468,13 @@ class PlotFrame(ttk.Frame):
                                           text="Switch to Multi Antenna mode to enable 3D viewer\n(install 'pyvista' if missing)",
                                           style='Modern.TLabel')
         self._pv_placeholder.pack(expand=True)
+        # Remove from notebook in Single mode; re-add when switching to Multi
+        self._multi_pv_added = True
+        try:
+            self.notebook.forget(self.multi_pv_tab)
+            self._multi_pv_added = False
+        except Exception:
+            pass
 
         # Add small mode banners at the top of each tab
         self._create_banners()
@@ -562,6 +570,13 @@ class PlotFrame(ttk.Frame):
         self.mode = 'single'
         self._update_mode_buttons()
         self._update_mode_banners()
+        # Ensure the Multi Antenna PyVista tab is removed in single mode
+        try:
+            if getattr(self, '_multi_pv_added', False):
+                self.notebook.forget(self.multi_pv_tab)
+                self._multi_pv_added = False
+        except Exception:
+            pass
         # remove multi placeholders on pattern tabs
         self._hide_multi_placeholder('2d')
         self._hide_multi_placeholder('3d')
@@ -587,9 +602,21 @@ class PlotFrame(ttk.Frame):
         try:
             from antenna_sim.multi_patch_designer import MultiPatchPanel
             self.multi_panel = MultiPatchPanel(self.geometry_frame)
+            # Hide the in-panel right controls; keep only the figure on the Geometry tab
+            try:
+                self.multi_panel.right.grid_remove()
+            except Exception:
+                pass
             self.multi_panel.pack(fill='both', expand=True)
             # Hook PyVista tab to mirror multi-panel changes
             self._init_pv_tab()
+            # Add the Multi Antenna PyVista tab back in multi mode
+            try:
+                if not getattr(self, '_multi_pv_added', False):
+                    self.notebook.add(self.multi_pv_tab, text="Multi Antenna PyVista")
+                    self._multi_pv_added = True
+            except Exception:
+                pass
             # When main controls change, update PyVista and PV controls list
             def _on_multi_changed(patches):
                 # Update PyVista view
@@ -628,13 +655,6 @@ class PlotFrame(ttk.Frame):
         try:
             if self.multi_panel:
                 self._update_pv_view(self.multi_panel.patches)
-                if getattr(self, 'pv_controls', None) is not None:
-                    self.pv_controls.patches = self.multi_panel.patches
-                    idx = getattr(self.multi_panel, '_current_index', None)
-                    if idx is None:
-                        self.pv_controls._refresh_selector()
-                    else:
-                        self.pv_controls._refresh_selector(select_index=idx)
         except Exception:
             pass
         if self._mode_changed_cb:
@@ -700,86 +720,14 @@ class PlotFrame(ttk.Frame):
                 self._pv_placeholder = None
         except Exception:
             pass
-        # Try to create a PyVista view in a split layout (viewer left, controls right)
+        # Try to create a PyVista view only (controls will be on the left sidebar in multi mode)
         try:
-            # Container for split layout
-            self.pv_split = ttk.Frame(self.multi_pv_tab, style='Modern.TFrame')
-            self.pv_split.pack(fill='both', expand=True)
+            self.pv_view = PyVistaMultiAntennaView(self.multi_pv_tab)
+            # Do not require immediate availability; embedding finishes asynchronously
             try:
-                self.pv_split.columnconfigure(0, weight=1)
-                self.pv_split.columnconfigure(1, weight=0)
-                self.pv_split.rowconfigure(0, weight=1)
+                self.pv_view.pack(fill='both', expand=True)
             except Exception:
                 pass
-
-            # Left: embedded PyVista viewer
-            self.pv_view = PyVistaMultiAntennaView(self.pv_split)
-            if not self.pv_view.available:
-                raise RuntimeError(self.pv_view.error or 'PyVista not available')
-            self.pv_view.grid(row=0, column=0, sticky='nsew')
-
-            # Right: mirrored controls (reuse MultiPatchPanel UI; hide its left figure)
-            try:
-                from antenna_sim.multi_patch_designer import MultiPatchPanel
-                self.pv_controls = MultiPatchPanel(self.pv_split)
-                # Hide the matplotlib figure area of the mirror controls
-                try:
-                    self.pv_controls.left.grid_remove()
-                except Exception:
-                    pass
-                # Place controls in column 1
-                self.pv_controls.grid(row=0, column=1, sticky='ns')
-                # Share the same patch list with the main Geometry panel (if available)
-                try:
-                    if getattr(self, 'multi_panel', None) is not None:
-                        self.pv_controls.patches = self.multi_panel.patches
-                        # Keep selector in sync with the shared list
-                        try:
-                            self.pv_controls._refresh_selector()
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-                # When PV controls change, update both PyVista and Geometry views
-                def _pv_controls_changed(patches):
-                    try:
-                        self._update_pv_view(patches)
-                    except Exception:
-                        pass
-                    try:
-                        if getattr(self, 'multi_panel', None) is not None:
-                            # Redraw the matplotlib scene
-                            self.multi_panel._draw_scene()
-                            # Refresh selector so new/removed patches appear in Geometry panel
-                            try:
-                                prev_idx = getattr(self.multi_panel, '_current_index', None)
-                                # Prefer to keep current selection if still valid; otherwise select last item
-                                sel = prev_idx if (prev_idx is not None and 0 <= prev_idx < len(self.multi_panel.patches)) else (len(self.multi_panel.patches)-1 if self.multi_panel.patches else None)
-                                if sel is None:
-                                    self.multi_panel._refresh_selector()
-                                else:
-                                    self.multi_panel._refresh_selector(select_index=sel)
-                                # Force update combobox values in case ttk doesn't refresh
-                                try:
-                                    names = [p.name for p in self.multi_panel.patches]
-                                    self.multi_panel.sel_combo['values'] = names
-                                    if names:
-                                        self.multi_panel.sel_combo.current(sel if sel is not None else 0)
-                                        self.multi_panel._current_index = (sel if sel is not None else 0)
-                                        self.multi_panel._load_current_into_fields()
-                                except Exception:
-                                    pass
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
-                try:
-                    self.pv_controls.set_change_callback(_pv_controls_changed)
-                except Exception:
-                    pass
-            except Exception:
-                # Controls are optional; viewer still works
-                self.pv_controls = None
         except Exception as e:
             # Show placeholder with instructions
             msg = (
@@ -858,18 +806,19 @@ class PlotFrame(ttk.Frame):
                 sub_L = L + 2 * margin
                 sub_W = W + 2 * margin
                 z_plane = 0.02  # slightly above patch plane for visibility
+                # Right-hand mapping: X spans width W, Y spans length L
                 if feed_direction == FeedDirection.NEG_X:
-                    feed_start = [-sub_L/2, -feed_width_mm/2, z_plane]
-                    feed_stop  = [-L/2,     +feed_width_mm/2, z_plane]
+                    feed_start = [-sub_W/2, -feed_width_mm/2, z_plane]
+                    feed_stop  = [ -W/2,     +feed_width_mm/2, z_plane]
                 elif feed_direction == FeedDirection.POS_X:
-                    feed_start = [ L/2,     -feed_width_mm/2, z_plane]
-                    feed_stop  = [ sub_L/2, +feed_width_mm/2, z_plane]
+                    feed_start = [  W/2,     -feed_width_mm/2, z_plane]
+                    feed_stop  = [  sub_W/2, +feed_width_mm/2, z_plane]
                 elif feed_direction == FeedDirection.NEG_Y:
-                    feed_start = [-feed_width_mm/2, -sub_W/2, z_plane]
-                    feed_stop  = [ +feed_width_mm/2, -W/2,   z_plane]
+                    feed_start = [ -feed_width_mm/2, -sub_L/2, z_plane]
+                    feed_stop  = [ +feed_width_mm/2,   -L/2,   z_plane]
                 else:  # POS_Y
-                    feed_start = [-feed_width_mm/2, W/2,   z_plane]
-                    feed_stop  = [ +feed_width_mm/2, sub_W/2, z_plane]
+                    feed_start = [ -feed_width_mm/2,   L/2,   z_plane]
+                    feed_stop  = [ +feed_width_mm/2,  sub_L/2, z_plane]
                 # Draw the microstrip as a small 3D box (prism) for better realism
                 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
                 t = max(0.08, 0.06 * h)  # mm
@@ -1086,23 +1035,48 @@ class PyVistaMultiAntennaView(ttk.Frame):
         self._latest_patches = []
         self._pv_plotter = None
         self._plotter = None  # embedded BackgroundPlotter (Qt window reparented into Tk)
+        # Dynamic origin axes state (actors)
+        self._axis = {
+            'x': {'mesh': None, 'actor': None},
+            'y': {'mesh': None, 'actor': None},
+            'z': {'mesh': None, 'actor': None},
+        }
+        self._scene_char_len = 0.5  # characteristic length of the scene (updated per rebuild)
+        # Optional camera toolbar removed to maximize embedded view area
+        self._toolbar = None
         try:
+            import os
+            # Prefer Desktop OpenGL for stability on Windows
+            os.environ.setdefault('QT_OPENGL', 'desktop')
             import pyvista as pv
-            from pyvistaqt import QtInteractor
+            from pyvistaqt import QtInteractor, BackgroundPlotter
             import ctypes
             try:
                 from PyQt5.QtWidgets import QApplication
+                from PyQt5.QtGui import QSurfaceFormat
+                from PyQt5.QtCore import Qt
             except Exception:
                 try:
                     from PySide2.QtWidgets import QApplication
+                    from PySide2.QtGui import QSurfaceFormat
+                    from PySide2.QtCore import Qt
                 except Exception:
                     QApplication = None
+                    QSurfaceFormat = None
+                    Qt = None
 
             # Theme
             try:
                 pv.global_theme.background = '#2b2b2b'
                 pv.global_theme.foreground = 'white'
                 pv.global_theme.edge_color = 'black'
+                # Avoid MSAA FBO attachments which can fail on embedded contexts
+                pv.global_theme.multi_samples = 0
+                # Prefer FXAA
+                try:
+                    pv.global_theme.anti_aliasing = 'fxaa'
+                except Exception:
+                    pass
             except Exception:
                 pass
 
@@ -1111,93 +1085,276 @@ class PyVistaMultiAntennaView(ttk.Frame):
             self.host.pack(fill='both', expand=True)
             self.update_idletasks()
 
-            # Create a PyVistaQt QtInteractor (QWidget) and show to realize native window
-            self._plotter = QtInteractor(None)
+            # Default to embedded mode inside the Tk tab.
+            # You can force external window by setting PV_EMBED=0 before launch.
+            use_embedded = True
             try:
-                self._plotter.show()
+                use_embedded = os.environ.get('PV_EMBED', '1') == '1'
             except Exception:
                 pass
 
-            # Reparent Qt widget into this Tk frame (Windows only) and strip window chrome
-            try:
-                self._hwnd_tk = int(self.host.winfo_id())
-                self._hwnd_qt = int(self._plotter.winId())
-                user32 = ctypes.windll.user32
-                self._user32 = user32
-                GWL_STYLE = -16
-                WS_CHILD = 0x40000000
-                WS_VISIBLE = 0x10000000
-                WS_CLIPSIBLINGS = 0x04000000
-                WS_CLIPCHILDREN = 0x02000000
-                WS_POPUP = 0x80000000
-                WS_CAPTION = 0x00C00000
-                WS_THICKFRAME = 0x00040000
-                WS_MINIMIZEBOX = 0x00020000
-                WS_MAXIMIZEBOX = 0x00010000
-                WS_SYSMENU = 0x00080000
-                WS_BORDER = 0x00800000
-                # Set child window style and parent
+            if not use_embedded:
+                # External robust path
                 try:
-                    style = user32.GetWindowLongPtrW(self._hwnd_qt, GWL_STYLE)
-                    style &= ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU | WS_BORDER)
-                    style |= (WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_VISIBLE)
-                    user32.SetWindowLongPtrW(self._hwnd_qt, GWL_STYLE, style)
-                except Exception:
+                    self._ext_plotter = BackgroundPlotter(title='Multi Antenna (PyVista)', auto_update=True)
+                    # Make sure VTK MSAA is disabled on this window too
                     try:
-                        style = user32.GetWindowLongW(self._hwnd_qt, GWL_STYLE)
-                        style &= ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU | WS_BORDER)
-                        style |= (WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_VISIBLE)
-                        user32.SetWindowLongW(self._hwnd_qt, GWL_STYLE, style)
+                        ren_win = getattr(self._ext_plotter, 'ren_win', None) or getattr(self._ext_plotter, 'render_window', None)
+                        if ren_win is not None:
+                            try: ren_win.SetMultiSamples(0)
+                            except Exception: pass
                     except Exception:
                         pass
-                user32.SetParent(self._hwnd_qt, self._hwnd_tk)
-                # Apply style changes
-                try:
-                    SWP_NOSIZE = 0x0001; SWP_NOMOVE = 0x0002; SWP_NOZORDER = 0x0004; SWP_FRAMECHANGED = 0x0020
-                    user32.SetWindowPos(self._hwnd_qt, 0, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED)
+                    # UI in tab
+                    info = ttk.Label(self.host, text=(
+                        "The 3D viewer runs in a separate window for maximum stability on Windows.\n"
+                        "You can force embedded mode by setting environment variable PV_EMBED=1 (experimental)."),
+                        style='Modern.TLabel', justify='left')
+                    info.pack(pady=(12,8))
+                    btn = ttk.Button(self.host, text='Focus 3D Window', style='Modern.TButton', command=lambda: self._ext_plotter.show())
+                    btn.pack()
+                    # Wire external plotter as active so rebuild() updates it
+                    self._plotter = self._ext_plotter
+                    self.available = True
+                    # If patches already queued, render them
+                    if self._latest_patches:
+                        try:
+                            self.rebuild(self._latest_patches)
+                        except Exception:
+                            pass
+                    return
                 except Exception:
+                    # If external creation fails, fall back to embedded path below
                     pass
-                # Fit the child to host size
-                def _resize(ev=None):
-                    try:
-                        w = max(1, self.host.winfo_width()); h = max(1, self.host.winfo_height())
-                        user32.MoveWindow(self._hwnd_qt, 0, 0, int(w), int(h), True)
-                    except Exception:
-                        pass
-                self.host.bind('<Configure>', _resize)
-                _resize()
-            except Exception:
-                pass
 
-            # Initial axes corner widget
-            try:
-                self._plotter.add_axes()
-                self._plotter.enable_anti_aliasing()
-            except Exception:
-                pass
-
-            # Periodically pump Qt events so the embedded window stays responsive
+            # Ensure a Qt application exists BEFORE creating any QWidget
             self._qt_app = None
             try:
                 if QApplication is not None:
+                    # Set a sane default OpenGL surface format (no MSAA, depth buffer)
+                    if QSurfaceFormat is not None:
+                        fmt = QSurfaceFormat()
+                        try:
+                            fmt.setSamples(0)
+                        except Exception:
+                            pass
+                        try:
+                            fmt.setDepthBufferSize(24)
+                        except Exception:
+                            pass
+                        try:
+                            QSurfaceFormat.setDefaultFormat(fmt)
+                        except Exception:
+                            pass
                     self._qt_app = QApplication.instance() or QApplication([])
             except Exception:
                 pass
-            def _pump_qt():
+
+            # Create a PyVistaQt QtInteractor (QWidget) but defer showing until sized
+            self._plotter = QtInteractor(None)
+            try:
+                self._plotter.setMinimumSize(100, 100)
+                self._plotter.setUpdatesEnabled(False)
+                # Ensure frameless look in embedded mode
+                if Qt is not None:
+                    try:
+                        self._plotter.setWindowFlag(Qt.FramelessWindowHint, True)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            # Defer reparent and first show until host has a valid size to avoid 0-height FBO
+            def _finalize_embed():
                 try:
-                    if self._qt_app is not None:
-                        self._qt_app.processEvents()
+                    w = int(self.host.winfo_width())
+                    h = int(self.host.winfo_height())
+                except Exception:
+                    w, h = 0, 0
+                if w < 50 or h < 50:
+                    try:
+                        self.after(30, _finalize_embed)
+                    except Exception:
+                        pass
+                    return
+
+                # Reparent Qt widget into this Tk frame (Windows only)
+                try:
+                    self._hwnd_tk = int(self.host.winfo_id())
+                    self._hwnd_qt = int(self._plotter.winId())
+                    user32 = ctypes.windll.user32
+                    self._user32 = user32
+                    # Ensure the Qt window becomes a proper child (minimal style changes)
+                    try:
+                        GWL_STYLE = -16
+                        GWL_EXSTYLE = -20
+                        WS_CHILD = 0x40000000
+                        WS_VISIBLE = 0x10000000
+                        WS_CLIPSIBLINGS = 0x04000000
+                        WS_CLIPCHILDREN = 0x02000000
+                        WS_POPUP = 0x80000000
+                        WS_CAPTION = 0x00C00000
+                        WS_THICKFRAME = 0x00040000
+                        WS_MINIMIZEBOX = 0x00020000
+                        WS_MAXIMIZEBOX = 0x00010000
+                        WS_SYSMENU = 0x00080000
+                        WS_BORDER = 0x00800000
+                        WS_EX_APPWINDOW = 0x00040000
+                        WS_EX_WINDOWEDGE = 0x00000100
+                        WS_EX_DLGMODALFRAME = 0x00000001
+                        try:
+                            style = user32.GetWindowLongPtrW(self._hwnd_qt, GWL_STYLE)
+                        except Exception:
+                            style = user32.GetWindowLongW(self._hwnd_qt, GWL_STYLE)
+                        style &= ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU | WS_BORDER)
+                        style |= (WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN)
+                        try:
+                            user32.SetWindowLongPtrW(self._hwnd_qt, GWL_STYLE, style)
+                        except Exception:
+                            user32.SetWindowLongW(self._hwnd_qt, GWL_STYLE, style)
+                        # Also clear extended styles that can force a title bar
+                        try:
+                            exstyle = user32.GetWindowLongPtrW(self._hwnd_qt, GWL_EXSTYLE)
+                        except Exception:
+                            exstyle = user32.GetWindowLongW(self._hwnd_qt, GWL_EXSTYLE)
+                        exstyle &= ~(WS_EX_APPWINDOW | WS_EX_WINDOWEDGE | WS_EX_DLGMODALFRAME)
+                        try:
+                            user32.SetWindowLongPtrW(self._hwnd_qt, GWL_EXSTYLE, exstyle)
+                        except Exception:
+                            user32.SetWindowLongW(self._hwnd_qt, GWL_EXSTYLE, exstyle)
+                    except Exception:
+                        pass
+                    user32.SetParent(self._hwnd_qt, self._hwnd_tk)
+                    # Apply style changes
+                    try:
+                        SWP_NOSIZE = 0x0001; SWP_NOMOVE = 0x0002; SWP_NOZORDER = 0x0004; SWP_FRAMECHANGED = 0x0020
+                        user32.SetWindowPos(self._hwnd_qt, 0, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED)
+                    except Exception:
+                        pass
+                    # Fit the child to host size (use host size in logical px; let Qt handle DPI)
+                    def _resize(ev=None):
+                        try:
+                            w2 = max(200, int(self.host.winfo_width()))
+                            h2 = max(150, int(self.host.winfo_height()))
+                            # Use logical TK pixels; embedding uses same coordinate space as host
+                            user32.MoveWindow(self._hwnd_qt, 0, 0, int(w2), int(h2), True)
+                            try:
+                                # Also tell Qt about the new size
+                                self._plotter.resize(int(w2), int(h2))
+                                self._plotter.update()
+                                try:
+                                    self._plotter.render()
+                                except Exception:
+                                    pass
+                            except Exception:
+                                pass
+                        except Exception:
+                            pass
+                    self.host.bind('<Configure>', _resize)
+                    try:
+                        self.bind('<Configure>', _resize)
+                    except Exception:
+                        pass
+                    _resize()
+                    try:
+                        self.after(50, _resize)
+                        self.after(250, _resize)
+                        self.after(600, _resize)
+                    except Exception:
+                        pass
                 except Exception:
                     pass
+
+                # Show and enable rendering now that we have a real size
                 try:
-                    self.after(16, _pump_qt)
+                    self._plotter.show()
+                    self._plotter.setUpdatesEnabled(True)
                 except Exception:
                     pass
-            _pump_qt()
-            self.available = True
+
+                # Initial axes corner widget
+                try:
+                    # Make sure VTK itself has MSAA disabled and depth-peeling off
+                    try:
+                        ren_win = getattr(self._plotter, 'ren_win', None)
+                        if ren_win is None:
+                            ren_win = self._plotter.render_window  # older attr name
+                        if ren_win is not None:
+                            try:
+                                ren_win.SetMultiSamples(0)
+                            except Exception:
+                                pass
+                            try:
+                                ren = self._plotter.renderer
+                                ren.SetUseDepthPeeling(False)
+                            except Exception:
+                                pass
+                    except Exception:
+                        pass
+                    # Clickable camera orientation widget (top-right)
+                    try:
+                        if hasattr(self._plotter, 'add_camera_orientation_widget'):
+                            self._plotter.add_camera_orientation_widget()
+                    except Exception:
+                        pass
+                    # Disable post-process AA entirely to avoid FBO usage
+                    try:
+                        if hasattr(self._plotter, 'disable_anti_aliasing'):
+                            self._plotter.disable_anti_aliasing()
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+
+                # Periodically pump Qt events so the embedded window stays responsive
+                def _pump_qt():
+                    try:
+                        if QApplication is not None and self._qt_app is not None:
+                            self._qt_app.processEvents()
+                    except Exception:
+                        pass
+                    try:
+                        self.after(16, _pump_qt)
+                    except Exception:
+                        pass
+                _pump_qt()
+
+                self.available = True
+                # First render (even if empty) to draw axes and set camera
+                try:
+                    self.rebuild(self._latest_patches)
+                except Exception:
+                    pass
+                # Install camera callbacks to keep origin axes scaled with zoom
+                try:
+                    self._install_camera_callbacks()
+                except Exception:
+                    pass
+
+            _finalize_embed()
         except Exception as e:
+            # Robust fallback: open external window with BackgroundPlotter
             self.error = str(e)
-            ttk.Label(self, text=f"3D viewer unavailable: {e}", style='Modern.TLabel').pack(expand=True)
+            self.available = False
+            try:
+                self._ext_plotter = BackgroundPlotter(title='Multi Antenna (PyVista)', auto_update=True)
+            except Exception:
+                self._ext_plotter = None
+            # Provide a focus button in the tab
+            fallback = ttk.Frame(self, style='Modern.TFrame')
+            msg = ttk.Label(fallback, text=(
+                "Embedded 3D viewer failed to initialize (falling back to a separate window).\n"
+                f"Details: {e}\n\nClick the button below to focus the external 3D window."),
+                style='Modern.TLabel', justify='left')
+            msg.pack(pady=(12,8))
+            def _focus_ext():
+                try:
+                    if getattr(self, '_ext_plotter', None) is not None:
+                        self._ext_plotter.show()
+                except Exception:
+                    pass
+            ttk.Button(fallback, text='Focus 3D Window', command=_focus_ext, style='Modern.TButton').pack()
+            fallback.pack(fill='both', expand=True)
 
     # ---- Utilities ----
     @staticmethod
@@ -1260,32 +1417,22 @@ class PyVistaMultiAntennaView(ttk.Frame):
             plotter.clear()
         except Exception:
             pass
-        # Axes: corner triad and origin lines with labels
+        # Determine characteristic scene length from patches (used for axis scaling)
         try:
-            plotter.add_axes()
-            # Determine a generous axis length from geometry
-            axis_len = 0.5
-            try:
-                dims = []  # characteristic lengths per instance
-                for inst in patches or []:
-                    if inst.params.patch_length_m and inst.params.patch_width_m:
-                        dims.append(max(inst.params.patch_length_m, inst.params.patch_width_m))
-                    else:
-                        from antenna_sim.physics import design_patch_for_frequency
-                        L_m, W_m, _ = design_patch_for_frequency(inst.params.frequency_hz, inst.params.eps_r, inst.params.h_m)
-                        dims.append(max(L_m, W_m))
-                if dims:
-                    axis_len = 1.8 * max(dims)  # extend well beyond geometry
-            except Exception:
-                pass
-            import pyvista as pv
-            line_x = pv.Line((-axis_len,0,0), (axis_len,0,0)); plotter.add_mesh(line_x, color=(1.0,0.3,0.2), line_width=5)
-            line_y = pv.Line((0,-axis_len,0), (0,axis_len,0)); plotter.add_mesh(line_y, color=(0.2,1.0,0.3), line_width=5)
-            line_z = pv.Line((0,0,-axis_len), (0,0,axis_len)); plotter.add_mesh(line_z, color=(0.3,0.5,1.0), line_width=5)
-            pts = np.array([[axis_len,0,0],[0,axis_len,0],[0,0,axis_len]])
-            plotter.add_point_labels(pts, ['+X','+Y','+Z'], always=True, font_size=18, text_color='white')
+            dims = []
+            for inst in patches or []:
+                if inst.params.patch_length_m and inst.params.patch_width_m:
+                    dims.append(max(inst.params.patch_length_m, inst.params.patch_width_m))
+                else:
+                    from antenna_sim.physics import design_patch_for_frequency
+                    L_m, W_m, _ = design_patch_for_frequency(inst.params.frequency_hz, inst.params.eps_r, inst.params.h_m)
+                    dims.append(max(L_m, W_m))
+            if dims:
+                self._scene_char_len = max(0.5, max(dims))
+            else:
+                self._scene_char_len = 0.5
         except Exception:
-            pass
+            self._scene_char_len = 0.5
         color_sub = (0.23, 0.65, 0.43)
         color_gnd = (0.72, 0.45, 0.20)
         color_patch = (1.0, 0.83, 0.30)
@@ -1330,6 +1477,11 @@ class PyVistaMultiAntennaView(ttk.Frame):
             plotter.reset_camera()
         except Exception:
             pass
+        # Build/update dynamic origin axes now that the camera is valid
+        try:
+            self._rescale_origin_axes(initial_build=True)
+        except Exception:
+            pass
 
     def rebuild(self, patches):
         self._latest_patches = patches
@@ -1369,6 +1521,77 @@ class PyVistaMultiAntennaView(ttk.Frame):
         except Exception:
             pass
         super().destroy()
+
+    # ---- Camera/axes helpers ----
+    def _install_camera_callbacks(self):
+        iren = getattr(self._plotter, 'iren', None)
+        if iren is None:
+            return
+        def _evt(obj=None, evt:str=None):
+            try:
+                # Slight debounce by scheduling on Tk loop
+                self.after(0, self._rescale_origin_axes)
+            except Exception:
+                pass
+        try:
+            for ev in ['EndInteractionEvent', 'MouseWheelForwardEvent', 'MouseWheelBackwardEvent', 'InteractionEvent']:
+                try:
+                    iren.AddObserver(ev, _evt)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _compute_axis_len(self):
+        try:
+            cam = self._plotter.camera
+            import math
+            fp = np.array(cam.focal_point)
+            pos = np.array(cam.position)
+            dist = float(np.linalg.norm(pos - fp))
+            va = float(getattr(cam, 'view_angle', 30.0))
+            height = 2.0 * dist * math.tan(math.radians(va * 0.5))
+            # Use 35% of current view height, but not smaller than scene_char_len
+            return max(0.75 * self._scene_char_len, 0.35 * height)
+        except Exception:
+            return max(0.75 * self._scene_char_len, 0.5)
+
+    def _rescale_origin_axes(self, initial_build=False):
+        if not self.available or self._plotter is None:
+            return
+        try:
+            import pyvista as pv
+            L = float(self._compute_axis_len())
+            # Create or update line meshes
+            def _ensure(axis_key, p0, p1, color):
+                rec = self._axis[axis_key]
+                if rec['mesh'] is None:
+                    rec['mesh'] = pv.Line(p0, p1)
+                    rec['actor'] = self._plotter.add_mesh(rec['mesh'], color=color, line_width=5)
+                else:
+                    rec['mesh'].points[:] = np.array([p0, p1])
+            _ensure('x', (-L,0,0), (L,0,0), (1.0,0.3,0.2))
+            _ensure('y', (0,-L,0), (0,L,0), (0.2,1.0,0.3))
+            _ensure('z', (0,0,-L), (0,0,L), (0.3,0.5,1.0))
+            # Labels at positive ends
+            try:
+                pts = np.array([[L,0,0],[0,L,0],[0,0,L]])
+                if self._axis['labels_actor'] is not None:
+                    try:
+                        self._plotter.remove_actor(self._axis['labels_actor'])
+                    except Exception:
+                        pass
+                self._axis['labels_actor'] = self._plotter.add_point_labels(pts, ['+X','+Y','+Z'], always=True, font_size=18, text_color='white')
+            except Exception:
+                pass
+            # Render
+            if not initial_build:
+                try:
+                    self._plotter.render()
+                except Exception:
+                    pass
+        except Exception:
+            pass
         
     def open_multi_patch(self):
         """Open the Multi Patch Designer window."""
@@ -1890,14 +2113,17 @@ class AntennaSimulatorGUI:
         # Left panel (parameters and controls)
         left_panel = ttk.Frame(main_frame, style='Modern.TFrame')
         left_panel.pack(side='left', fill='y', padx=(0, 5))
+        self.left_panel = left_panel
+        # Host for Multi Patch Controls when in multi mode (created lazily)
+        self.multi_controls_host = None
         
-        # Parameters frame
-        self.param_frame = ParameterFrame(left_panel, ModernStyle)
-        self.param_frame.pack(fill='x', pady=(0, 5))
-        
-        # Controls frame
+        # Controls frame (place on top)
         self.control_frame = ControlFrame(left_panel, self.update_geometry, self.run_simulation)
         self.control_frame.pack(fill='x')
+        
+        # Single Patch Controls under the FDTD controls
+        self.param_frame = ParameterFrame(left_panel, ModernStyle)
+        self.param_frame.pack(fill='x', pady=(0, 5))
         
         # Right panel (plots and log)
         right_panel = ttk.Frame(main_frame, style='Modern.TFrame')
@@ -1942,9 +2168,52 @@ class AntennaSimulatorGUI:
                 solver_type = self.param_frame.vars['solver_type'].get()
                 feed_dir = self.param_frame.vars['feed_direction'].get()
                 self.plot_frame.update_geometry_plot(self.current_params, solver_type, feed_dir)
+                # Restore Single Patch Controls on the left
+                try:
+                    if self.multi_controls_host is not None:
+                        for w in list(self.multi_controls_host.winfo_children()):
+                            try:
+                                w.destroy()
+                            except Exception:
+                                pass
+                        try:
+                            self.multi_controls_host.pack_forget()
+                        except Exception:
+                            pass
+                        self.multi_controls_host.destroy()
+                        self.multi_controls_host = None
+                except Exception:
+                    pass
+                try:
+                    self.param_frame.pack_forget()
+                    self.param_frame.pack(fill='x', pady=(0, 5))
+                except Exception:
+                    pass
             else:
                 # Entered multi mode: nothing to do yet (future: disable Run Simulation)
-                pass
+                # Hide Single Patch Controls; create Multi Patch Controls host on left
+                try:
+                    self.param_frame.pack_forget()
+                except Exception:
+                    pass
+                if self.multi_controls_host is None:
+                    try:
+                        self.multi_controls_host = ttk.Frame(self.left_panel, style='Card.TFrame')
+                        self.multi_controls_host.pack(fill='x', pady=(0,5))
+                    except Exception:
+                        self.multi_controls_host = None
+                # Build Multi Patch Controls into the left sidebar host using the active MultiPatchPanel
+                try:
+                    if getattr(self.plot_frame, 'multi_panel', None) is not None:
+                        host = self.multi_controls_host or self.left_panel
+                        for w in list(host.winfo_children()):
+                            try:
+                                w.destroy()
+                            except Exception:
+                                pass
+                        self.plot_frame.multi_panel._build_right_controls(host)
+                except Exception:
+                    pass
         except Exception as e:
             print(f"Mode change refresh error: {e}")
     

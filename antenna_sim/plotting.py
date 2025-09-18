@@ -59,15 +59,15 @@ def draw_patch_3d_geometry(L_m: float, W_m: float, h_m: float, fig_size=(8, 6), 
     
     # Patch (top metal layer)
     # Copper thickness (visual) taken as a small fraction of substrate height
-    # If you want to drive this from a user metal thickness, thread it through here
+    # Map width W -> X, length L -> Y to match Multi views (right-hand)
     patch_thickness = max(0.08, 0.06 * h)  # mm
     patch_verts = [
-        [[-L/2, -W/2, 0], [L/2, -W/2, 0], [L/2, W/2, 0], [-L/2, W/2, 0]],  # bottom
-        [[-L/2, -W/2, patch_thickness], [L/2, -W/2, patch_thickness], [L/2, W/2, patch_thickness], [-L/2, W/2, patch_thickness]],  # top
-        [[-L/2, -W/2, 0], [-L/2, -W/2, patch_thickness], [-L/2, W/2, patch_thickness], [-L/2, W/2, 0]], # left
-        [[L/2, -W/2, 0], [L/2, -W/2, patch_thickness], [L/2, W/2, patch_thickness], [L/2, W/2, 0]],     # right
-        [[-L/2, -W/2, 0], [L/2, -W/2, 0], [L/2, -W/2, patch_thickness], [-L/2, -W/2, patch_thickness]], # front
-        [[-L/2, W/2, 0], [L/2, W/2, 0], [L/2, W/2, patch_thickness], [-L/2, W/2, patch_thickness]]      # back
+        [[-W/2, -L/2, 0], [W/2, -L/2, 0], [W/2, L/2, 0], [-W/2, L/2, 0]],  # bottom
+        [[-W/2, -L/2, patch_thickness], [W/2, -L/2, patch_thickness], [W/2, L/2, patch_thickness], [-W/2, L/2, patch_thickness]],  # top
+        [[-W/2, -L/2, 0], [-W/2, -L/2, patch_thickness], [-W/2, L/2, patch_thickness], [-W/2, L/2, 0]], # left (-X)
+        [[W/2, -L/2, 0], [W/2, -L/2, patch_thickness], [W/2, L/2, patch_thickness], [W/2, L/2, 0]],     # right (+X)
+        [[-W/2, -L/2, 0], [W/2, -L/2, 0], [W/2, -L/2, patch_thickness], [-W/2, -L/2, patch_thickness]], # front (-Y)
+        [[-W/2, L/2, 0], [W/2, L/2, 0], [W/2, L/2, patch_thickness], [-W/2, L/2, patch_thickness]]      # back (+Y)
     ]
     
     # Slightly higher alpha so patch dominates top-down
@@ -92,8 +92,8 @@ def draw_patch_3d_geometry(L_m: float, W_m: float, h_m: float, fig_size=(8, 6), 
     except Exception:
         pass
     
-    # Feed point (small cylinder at edge)
-    feed_x = -L/2
+    # Feed point (small cylinder at negative X edge)
+    feed_x = -W/2
     feed_y = 0
     feed_z = np.linspace(-h, patch_thickness, 20)
     feed_r = 0.5  # mm radius
@@ -108,8 +108,9 @@ def draw_patch_3d_geometry(L_m: float, W_m: float, h_m: float, fig_size=(8, 6), 
     # Dimension annotations (high contrast)
     label_box = dict(boxstyle='round,pad=0.3', fc='black', ec='none', alpha=0.6)
     if show_labels:
-        ax.text(0, -W/2-0.9*margin, patch_thickness*1.2, f'L = {L:.1f} mm', ha='center', fontsize=13, color='white', bbox=label_box)
-        ax.text(L/2+0.9*margin, 0, patch_thickness*1.2, f'W = {W:.1f} mm', ha='center', rotation=90, fontsize=13, color='white', bbox=label_box)
+        # With W->X and L->Y
+        ax.text(W/2+0.9*margin, 0, patch_thickness*1.2, f'W = {W:.1f} mm', ha='center', rotation=90, fontsize=13, color='white', bbox=label_box)
+        ax.text(0, -L/2-0.9*margin, patch_thickness*1.2, f'L = {L:.1f} mm', ha='center', fontsize=13, color='white', bbox=label_box)
     # Thickness indicator near front-left corner
     xh, yh = -sub_L/2 + 0.15*sub_L, -sub_W/2 + 0.15*sub_W
     ax.plot([xh, xh], [yh, yh], [-h, 0], color='#ff7043', linewidth=2.0)
