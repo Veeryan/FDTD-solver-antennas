@@ -41,6 +41,11 @@ class MultiPatchPanel(ttk.Frame):
         self.patches: List[PatchInstance] = []
         self._current_index: Optional[int] = None
         self._change_cb = None  # external listener for scene updates
+        # Track UI widgets for enable/disable and overlay
+        self._control_widgets: List[tk.Widget] = []
+        self._original_states: dict = {}
+        self._controls_container: Optional[ttk.Frame] = None
+        self._disabled_overlay: Optional[tk.Frame] = None
         self._build_ui()
         self._init_axes()
         self._draw_scene()
@@ -71,9 +76,14 @@ class MultiPatchPanel(ttk.Frame):
         self._build_right_controls(self.right)
 
     def _build_right_controls(self, parent: ttk.Frame):
+        # Reset control tracking and remember container
+        self._control_widgets = []
+        self._original_states = {}
+        self._controls_container = parent
         ttk.Label(parent, text="Multi Patch Controls", font=("Segoe UI", 12, "bold")).pack(fill='x', padx=10, pady=(12, 6))
-
-        ttk.Button(parent, text="Add Patch Antenna", command=self._on_add_patch).pack(fill='x', padx=10, pady=(0, 10))
+        btn_add = ttk.Button(parent, text="Add Patch Antenna", command=self._on_add_patch)
+        btn_add.pack(fill='x', padx=10, pady=(0, 10))
+        self._control_widgets.append(btn_add)
 
         sel = ttk.Frame(parent)
         sel.pack(fill='x', padx=10, pady=(0, 10))
@@ -83,6 +93,7 @@ class MultiPatchPanel(ttk.Frame):
         self.sel_combo.grid(row=0, column=1, sticky='ew', padx=(6, 0))
         sel.columnconfigure(1, weight=1)
         self.sel_combo.bind('<<ComboboxSelected>>', self._on_select_patch)
+        self._control_widgets.append(self.sel_combo)
 
         props = ttk.LabelFrame(parent, text="Selected Patch Properties")
         props.pack(fill='x', padx=10, pady=(0, 10))
@@ -113,11 +124,17 @@ class MultiPatchPanel(ttk.Frame):
                 e = ttk.Entry(props, textvariable=entry_var, width=12)
                 e.grid(row=r, column=1, sticky='ew')
                 e.bind('<Return>', lambda ev, f=field_key: self._apply_single_field(f))
+                self._control_widgets.append(e)
+                self._original_states[e] = 'normal'
             else:
                 e = ttk.Combobox(props, textvariable=entry_var, state='readonly', values=[m.value for m in Metal])
                 e.grid(row=r, column=1, sticky='ew')
                 e.bind('<<ComboboxSelected>>', lambda ev, f=field_key: self._apply_single_field(f))
-            ttk.Button(props, text='Set', width=6, command=lambda f=field_key: self._apply_single_field(f)).grid(row=r, column=2, padx=(6,0))
+                self._control_widgets.append(e)
+                self._original_states[e] = 'readonly'
+            btn = ttk.Button(props, text='Set', width=6, command=lambda f=field_key: self._apply_single_field(f))
+            btn.grid(row=r, column=2, padx=(6,0))
+            self._control_widgets.append(btn)
             r += 1
             return e
 
@@ -143,19 +160,94 @@ class MultiPatchPanel(ttk.Frame):
         self.var_show_substrate = tk.BooleanVar(value=True)
         self.var_show_ground = tk.BooleanVar(value=True)
         self.var_ground_style = tk.StringVar(value='edges')  # 'edges' | 'ring'
-        ttk.Checkbutton(disp, text="Show substrate", variable=self.var_show_substrate, command=self._draw_scene).grid(row=0, column=0, sticky='w')
-        ttk.Checkbutton(disp, text="Show ground", variable=self.var_show_ground, command=self._draw_scene).grid(row=0, column=1, sticky='w', padx=(10,0))
+        cb1 = ttk.Checkbutton(disp, text="Show substrate", variable=self.var_show_substrate, command=self._draw_scene)
+        cb1.grid(row=0, column=0, sticky='w')
+        cb2 = ttk.Checkbutton(disp, text="Show ground", variable=self.var_show_ground, command=self._draw_scene)
+        cb2.grid(row=0, column=1, sticky='w', padx=(10,0))
+        self._control_widgets.extend([cb1, cb2])
         ttk.Label(disp, text="Ground style").grid(row=1, column=0, sticky='w')
         grd = ttk.Combobox(disp, textvariable=self.var_ground_style, state='readonly', values=['edges','ring'])
         grd.grid(row=1, column=1, sticky='ew')
         grd.bind('<<ComboboxSelected>>', lambda ev: self._draw_scene())
+        self._control_widgets.append(grd)
+        self._original_states[grd] = 'readonly'
+
+        # Far-field sampling controls used by the multi-antenna solver
+        ff = ttk.LabelFrame(parent, text="Far-Field Sampling")
+        ff.pack(fill='x', padx=10, pady=(0, 10))
+        try:
+            ff.columnconfigure(1, weight=1)
+        except Exception:
+            pass
+        self.var_theta_step = tk.DoubleVar(value=2.0)
+        self.var_phi_step = tk.DoubleVar(value=5.0)
+        ttk.Label(ff, text="Theta step (°)").grid(row=0, column=0, sticky='w')
+        e_th = ttk.Entry(ff, textvariable=self.var_theta_step, width=10)
+        e_th.grid(row=0, column=1, sticky='ew')
+        ttk.Label(ff, text="Phi step (°)").grid(row=1, column=0, sticky='w')
+        e_ph = ttk.Entry(ff, textvariable=self.var_phi_step, width=10)
+        e_ph.grid(row=1, column=1, sticky='ew')
+        self._control_widgets.extend([e_th, e_ph])
+        self._original_states[e_th] = 'normal'
+        self._original_states[e_ph] = 'normal'
+        ttk.Label(ff, text="Tip: smaller steps increase simulation time").grid(row=2, column=0, columnspan=2, sticky='w', pady=(4,0))
 
         # View controls
-        ttk.Button(parent, text="Fit View", command=self._fit_view).pack(fill='x', padx=10, pady=(0, 8))
+        btn_fit = ttk.Button(parent, text="Fit View", command=self._fit_view)
+        btn_fit.pack(fill='x', padx=10, pady=(0, 8))
+        self._control_widgets.append(btn_fit)
 
-        ttk.Button(parent, text="Apply Changes", command=self._on_apply_changes).pack(fill='x', padx=10, pady=(0, 6))
-        ttk.Button(parent, text="Remove Selected", command=self._on_remove_selected).pack(fill='x', padx=10, pady=(0, 6))
+        btn_apply = ttk.Button(parent, text="Apply Changes", command=self._on_apply_changes)
+        btn_apply.pack(fill='x', padx=10, pady=(0, 6))
+        btn_remove = ttk.Button(parent, text="Remove Selected", command=self._on_remove_selected)
+        btn_remove.pack(fill='x', padx=10, pady=(0, 6))
+        self._control_widgets.extend([btn_apply, btn_remove])
         ttk.Label(parent, text="Tip: Rotate with mouse, scroll to zoom.").pack(fill='x', padx=10, pady=(8, 10))
+
+    # ---- Enable/disable controls with overlay ----
+    def lock_controls(self):
+        try:
+            # Disable all interactive widgets
+            for w in self._control_widgets:
+                try:
+                    if isinstance(w, ttk.Combobox):
+                        w.configure(state='disabled')
+                    else:
+                        w.configure(state='disabled')
+                except Exception:
+                    pass
+            # Overlay
+            if self._controls_container is not None and self._disabled_overlay is None:
+                ov = tk.Frame(self._controls_container, bg='#2b2b2b')
+                ov.place(relx=0, rely=0, relwidth=1, relheight=1)
+                msg = tk.Label(ov, text="Locked while simulation is running...", fg='white', bg='#2b2b2b')
+                msg.place(relx=0.5, rely=0.5, anchor='center')
+                self._disabled_overlay = ov
+        except Exception:
+            pass
+
+    def unlock_controls(self):
+        try:
+            # Restore original states
+            for w in self._control_widgets:
+                try:
+                    orig = self._original_states.get(w, 'normal')
+                    # Combobox must be 'readonly' to prevent typing when enabled
+                    if isinstance(w, ttk.Combobox):
+                        w.configure(state=orig if orig in ('readonly', 'normal') else 'readonly')
+                    else:
+                        w.configure(state=orig if orig in ('normal',) else 'normal')
+                except Exception:
+                    pass
+            # Remove overlay
+            if self._disabled_overlay is not None:
+                try:
+                    self._disabled_overlay.destroy()
+                except Exception:
+                    pass
+                self._disabled_overlay = None
+        except Exception:
+            pass
 
     # ---------- Axes and rendering ----------
     def _init_axes(self, limits: Optional[tuple] = None):

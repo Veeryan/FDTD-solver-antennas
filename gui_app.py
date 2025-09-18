@@ -916,11 +916,8 @@ class PlotFrame(ttk.Frame):
             traceback.print_exc()
 
     def update_2d_patterns(self, theta, intensity):
-        """Update 2D plots. No-op while in multi mode (placeholder shown)."""
+        """Update 2D plots."""
         try:
-            if getattr(self, 'mode', 'single') == 'multi':
-                self._show_multi_placeholder('2d')
-                return
             self._hide_multi_placeholder('2d')
             if self.pattern_2d_canvas:
                 self.pattern_2d_canvas.get_tk_widget().destroy()
@@ -957,46 +954,56 @@ class PlotFrame(ttk.Frame):
             import traceback; traceback.print_exc()
 
     def update_3d_pattern(self, theta, phi, intensity, params):
-        """Update 3D plot. No-op while in multi mode (placeholder shown)."""
+        """Update 3D radiation pattern plot with labeled axes and colorbar.
+
+        Supports either a full theta x phi grid (preferred) or E/H-plane cuts.
+        """
         try:
-            if getattr(self, 'mode', 'single') == 'multi':
-                self._show_multi_placeholder('3d'); return
+            # Hide placeholder and clear any prior canvas
             self._hide_multi_placeholder('3d')
             if self.pattern_3d_canvas:
                 self.pattern_3d_canvas.get_tk_widget().destroy()
-            if intensity.ndim == 2 and intensity.shape[1] >= 2:
-                th_deg = np.rad2deg(theta)
-                E_plane_data = intensity[:, 0]
-                H_plane_data = intensity[:, 1]
-                phi_full = np.linspace(0, 2*np.pi, 73)
-                pattern_3d = np.zeros((len(theta), len(phi_full)))
-                for i, phi_val in enumerate(phi_full):
-                    phi_norm = (phi_val % (2*np.pi))
-                    if phi_norm <= np.pi/2:
-                        weight = phi_norm / (np.pi/2); pattern_3d[:, i] = (1-weight) * E_plane_data + weight * H_plane_data
-                    elif phi_norm <= np.pi:
-                        weight = (phi_norm - np.pi/2) / (np.pi/2); pattern_3d[:, i] = (1-weight) * H_plane_data + weight * E_plane_data
-                    elif phi_norm <= 3*np.pi/2:
-                        weight = (phi_norm - np.pi) / (np.pi/2); pattern_3d[:, i] = (1-weight) * E_plane_data + weight * H_plane_data
-                    else:
-                        weight = (phi_norm - 3*np.pi/2) / (np.pi/2); pattern_3d[:, i] = (1-weight) * H_plane_data + weight * E_plane_data
-                TH, PH = np.meshgrid(theta, phi_full, indexing='ij')
-                pattern_norm = pattern_3d - np.max(pattern_3d)
-                pattern_linear = np.maximum(0.01, 10**(pattern_norm/20))
-                X = pattern_linear * np.sin(TH) * np.cos(PH)
-                Y = pattern_linear * np.sin(TH) * np.sin(PH)
-                Z = pattern_linear * np.cos(TH)
+
+            # Case A: full theta x phi grid available
+            if (phi is not None) and (intensity.ndim == 2) and (intensity.shape == (len(theta), len(phi))):
+                TH, PH = np.meshgrid(theta, phi, indexing='ij')
+                patt_db = np.asarray(intensity, dtype=float)
+                patt_norm_db = patt_db - float(np.nanmax(patt_db))  # normalize to 0 dB
+                R = np.maximum(0.01, 10.0**(patt_norm_db/20.0))
+                X = R * np.sin(TH) * np.cos(PH)
+                Y = R * np.sin(TH) * np.sin(PH)
+                Z = R * np.cos(TH)
+
                 fig_3d = Figure(figsize=(8, 6), facecolor='#2b2b2b')
                 ax_3d = fig_3d.add_subplot(111, projection='3d'); ax_3d.set_facecolor('#2b2b2b')
-                surf = ax_3d.plot_surface(
-                    X, Y, Z,
-                    facecolors=plt.cm.jet((pattern_3d - np.min(pattern_3d)) / (np.max(pattern_3d) - np.min(pattern_3d))),
-                    linewidth=0, antialiased=True, alpha=0.8,
-                )
+
+                # Color map by dB (plasma)
+                db = patt_norm_db
+                try:
+                    db_min = float(np.nanpercentile(db, 10))
+                except Exception:
+                    db_min = -20.0
+                db_clip = np.clip(db, db_min, 0.0)
+                norm = (db_clip - db_min) / max(1e-9, (0.0 - db_min))
+                ax_3d.plot_surface(X, Y, Z, facecolors=plt.cm.plasma(norm), linewidth=0, antialiased=True, alpha=0.95)
+
+                # Axes, labels and limits
                 ax_3d.tick_params(colors='white'); ax_3d.xaxis.pane.fill = False; ax_3d.yaxis.pane.fill = False; ax_3d.zaxis.pane.fill = False
+                ax_3d.set_xlabel('X', fontsize=12, color='white')
+                ax_3d.set_ylabel('Y', fontsize=12, color='white')
+                ax_3d.set_zlabel('Z', fontsize=12, color='white')
+                ax_3d.set_title(f'3D Radiation Pattern (normalized)\n{params.frequency_hz/1e9:.2f} GHz', fontsize=14, pad=20, color='white')
                 max_range = 1.2
                 ax_3d.set_xlim([-max_range, max_range]); ax_3d.set_ylim([-max_range, max_range]); ax_3d.set_zlim([-1.1, max_range])
                 ax_3d.view_init(elev=20, azim=-60)
+
+                # Colorbar in dB rel. max
+                m = plt.cm.ScalarMappable(cmap=plt.cm.plasma)
+                m.set_array(db_clip)
+                cbar = fig_3d.colorbar(m, ax=ax_3d, shrink=0.8, aspect=20)
+                cbar.set_label('Gain (dB rel. max)', fontsize=12, color='white')
+                cbar.ax.tick_params(colors='white')
+
                 fig_3d.tight_layout()
                 self.pattern_3d_canvas = FigureCanvasTkAgg(fig_3d, self.pattern_3d_frame)
                 self.pattern_3d_canvas.get_tk_widget().pack(fill='both', expand=True); self.pattern_3d_canvas.draw()
@@ -1012,1023 +1019,101 @@ class PlotFrame(ttk.Frame):
                     except Exception:
                         pass
                 fig_3d.canvas.mpl_connect('scroll_event', _on_scroll_3d)
-            else:
-                print("Cannot create 3D plot: insufficient data dimensions")
-        except Exception as e:
-            print(f"Error updating 3D pattern: {e}")
-            import traceback; traceback.print_exc()
 
-
-# ===== High-fidelity PyVista view (embedded via VTK) =====
-class PyVistaMultiAntennaView(ttk.Frame):
-    """Embedded high-fidelity 3D view using a PyVista Plotter hosted in a Tk widget.
-
-    Renders inside the tab so you can compare side-by-side with Matplotlib Geometry.
-    """
-
-    def __init__(self, parent):
-        super().__init__(parent, style='Modern.TFrame')
-        self.available = False
-        self.error = None
-        self._iren_widget = None
-        self._camera_snapshot = None
-        self._latest_patches = []
-        self._pv_plotter = None
-        self._plotter = None  # embedded BackgroundPlotter (Qt window reparented into Tk)
-        # Dynamic origin axes state (actors)
-        self._axis = {
-            'x': {'mesh': None, 'actor': None},
-            'y': {'mesh': None, 'actor': None},
-            'z': {'mesh': None, 'actor': None},
-        }
-        self._scene_char_len = 0.5  # characteristic length of the scene (updated per rebuild)
-        # Optional camera toolbar removed to maximize embedded view area
-        self._toolbar = None
-        try:
-            import os
-            # Prefer Desktop OpenGL for stability on Windows
-            os.environ.setdefault('QT_OPENGL', 'desktop')
-            import pyvista as pv
-            from pyvistaqt import QtInteractor, BackgroundPlotter
-            import ctypes
-            try:
-                from PyQt5.QtWidgets import QApplication
-                from PyQt5.QtGui import QSurfaceFormat
-                from PyQt5.QtCore import Qt
-            except Exception:
-                try:
-                    from PySide2.QtWidgets import QApplication
-                    from PySide2.QtGui import QSurfaceFormat
-                    from PySide2.QtCore import Qt
-                except Exception:
-                    QApplication = None
-                    QSurfaceFormat = None
-                    Qt = None
-
-            # Theme
-            try:
-                pv.global_theme.background = '#2b2b2b'
-                pv.global_theme.foreground = 'white'
-                pv.global_theme.edge_color = 'black'
-                # Avoid MSAA FBO attachments which can fail on embedded contexts
-                pv.global_theme.multi_samples = 0
-                # Prefer FXAA
-                try:
-                    pv.global_theme.anti_aliasing = 'fxaa'
-                except Exception:
-                    pass
-            except Exception:
-                pass
-
-            # Host frame inside this tab for embedding the Qt window
-            self.host = ttk.Frame(self, style='Modern.TFrame')
-            self.host.pack(fill='both', expand=True)
-            self.update_idletasks()
-
-            # Default to embedded mode inside the Tk tab.
-            # You can force external window by setting PV_EMBED=0 before launch.
-            use_embedded = True
-            try:
-                use_embedded = os.environ.get('PV_EMBED', '1') == '1'
-            except Exception:
-                pass
-
-            if not use_embedded:
-                # External robust path
-                try:
-                    self._ext_plotter = BackgroundPlotter(title='Multi Antenna (PyVista)', auto_update=True)
-                    # Make sure VTK MSAA is disabled on this window too
-                    try:
-                        ren_win = getattr(self._ext_plotter, 'ren_win', None) or getattr(self._ext_plotter, 'render_window', None)
-                        if ren_win is not None:
-                            try: ren_win.SetMultiSamples(0)
-                            except Exception: pass
-                    except Exception:
-                        pass
-                    # UI in tab
-                    info = ttk.Label(self.host, text=(
-                        "The 3D viewer runs in a separate window for maximum stability on Windows.\n"
-                        "You can force embedded mode by setting environment variable PV_EMBED=1 (experimental)."),
-                        style='Modern.TLabel', justify='left')
-                    info.pack(pady=(12,8))
-                    btn = ttk.Button(self.host, text='Focus 3D Window', style='Modern.TButton', command=lambda: self._ext_plotter.show())
-                    btn.pack()
-                    # Wire external plotter as active so rebuild() updates it
-                    self._plotter = self._ext_plotter
-                    self.available = True
-                    # If patches already queued, render them
-                    if self._latest_patches:
-                        try:
-                            self.rebuild(self._latest_patches)
-                        except Exception:
-                            pass
-                    return
-                except Exception:
-                    # If external creation fails, fall back to embedded path below
-                    pass
-
-            # Ensure a Qt application exists BEFORE creating any QWidget
-            self._qt_app = None
-            try:
-                if QApplication is not None:
-                    # Set a sane default OpenGL surface format (no MSAA, depth buffer)
-                    if QSurfaceFormat is not None:
-                        fmt = QSurfaceFormat()
-                        try:
-                            fmt.setSamples(0)
-                        except Exception:
-                            pass
-                        try:
-                            fmt.setDepthBufferSize(24)
-                        except Exception:
-                            pass
-                        try:
-                            QSurfaceFormat.setDefaultFormat(fmt)
-                        except Exception:
-                            pass
-                    self._qt_app = QApplication.instance() or QApplication([])
-            except Exception:
-                pass
-
-            # Create a PyVistaQt QtInteractor (QWidget) but defer showing until sized
-            self._plotter = QtInteractor(None)
-            try:
-                self._plotter.setMinimumSize(100, 100)
-                self._plotter.setUpdatesEnabled(False)
-                # Ensure frameless look in embedded mode
-                if Qt is not None:
-                    try:
-                        self._plotter.setWindowFlag(Qt.FramelessWindowHint, True)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-            # Defer reparent and first show until host has a valid size to avoid 0-height FBO
-            def _finalize_embed():
-                try:
-                    w = int(self.host.winfo_width())
-                    h = int(self.host.winfo_height())
-                except Exception:
-                    w, h = 0, 0
-                if w < 50 or h < 50:
-                    try:
-                        self.after(30, _finalize_embed)
-                    except Exception:
-                        pass
-                    return
-
-                # Reparent Qt widget into this Tk frame (Windows only)
-                try:
-                    self._hwnd_tk = int(self.host.winfo_id())
-                    self._hwnd_qt = int(self._plotter.winId())
-                    user32 = ctypes.windll.user32
-                    self._user32 = user32
-                    # Ensure the Qt window becomes a proper child (minimal style changes)
-                    try:
-                        GWL_STYLE = -16
-                        GWL_EXSTYLE = -20
-                        WS_CHILD = 0x40000000
-                        WS_VISIBLE = 0x10000000
-                        WS_CLIPSIBLINGS = 0x04000000
-                        WS_CLIPCHILDREN = 0x02000000
-                        WS_POPUP = 0x80000000
-                        WS_CAPTION = 0x00C00000
-                        WS_THICKFRAME = 0x00040000
-                        WS_MINIMIZEBOX = 0x00020000
-                        WS_MAXIMIZEBOX = 0x00010000
-                        WS_SYSMENU = 0x00080000
-                        WS_BORDER = 0x00800000
-                        WS_EX_APPWINDOW = 0x00040000
-                        WS_EX_WINDOWEDGE = 0x00000100
-                        WS_EX_DLGMODALFRAME = 0x00000001
-                        try:
-                            style = user32.GetWindowLongPtrW(self._hwnd_qt, GWL_STYLE)
-                        except Exception:
-                            style = user32.GetWindowLongW(self._hwnd_qt, GWL_STYLE)
-                        style &= ~(WS_POPUP | WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU | WS_BORDER)
-                        style |= (WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN)
-                        try:
-                            user32.SetWindowLongPtrW(self._hwnd_qt, GWL_STYLE, style)
-                        except Exception:
-                            user32.SetWindowLongW(self._hwnd_qt, GWL_STYLE, style)
-                        # Also clear extended styles that can force a title bar
-                        try:
-                            exstyle = user32.GetWindowLongPtrW(self._hwnd_qt, GWL_EXSTYLE)
-                        except Exception:
-                            exstyle = user32.GetWindowLongW(self._hwnd_qt, GWL_EXSTYLE)
-                        exstyle &= ~(WS_EX_APPWINDOW | WS_EX_WINDOWEDGE | WS_EX_DLGMODALFRAME)
-                        try:
-                            user32.SetWindowLongPtrW(self._hwnd_qt, GWL_EXSTYLE, exstyle)
-                        except Exception:
-                            user32.SetWindowLongW(self._hwnd_qt, GWL_EXSTYLE, exstyle)
-                    except Exception:
-                        pass
-                    user32.SetParent(self._hwnd_qt, self._hwnd_tk)
-                    # Apply style changes
-                    try:
-                        SWP_NOSIZE = 0x0001; SWP_NOMOVE = 0x0002; SWP_NOZORDER = 0x0004; SWP_FRAMECHANGED = 0x0020
-                        user32.SetWindowPos(self._hwnd_qt, 0, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_FRAMECHANGED)
-                    except Exception:
-                        pass
-                    # Fit the child to host size (use host size in logical px; let Qt handle DPI)
-                    def _resize(ev=None):
-                        try:
-                            w2 = max(200, int(self.host.winfo_width()))
-                            h2 = max(150, int(self.host.winfo_height()))
-                            # Use logical TK pixels; embedding uses same coordinate space as host
-                            user32.MoveWindow(self._hwnd_qt, 0, 0, int(w2), int(h2), True)
-                            try:
-                                # Also tell Qt about the new size
-                                self._plotter.resize(int(w2), int(h2))
-                                self._plotter.update()
-                                try:
-                                    self._plotter.render()
-                                except Exception:
-                                    pass
-                            except Exception:
-                                pass
-                        except Exception:
-                            pass
-                    self.host.bind('<Configure>', _resize)
-                    try:
-                        self.bind('<Configure>', _resize)
-                    except Exception:
-                        pass
-                    _resize()
-                    try:
-                        self.after(50, _resize)
-                        self.after(250, _resize)
-                        self.after(600, _resize)
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
-
-                # Show and enable rendering now that we have a real size
-                try:
-                    self._plotter.show()
-                    self._plotter.setUpdatesEnabled(True)
-                except Exception:
-                    pass
-
-                # Initial axes corner widget
-                try:
-                    # Make sure VTK itself has MSAA disabled and depth-peeling off
-                    try:
-                        ren_win = getattr(self._plotter, 'ren_win', None)
-                        if ren_win is None:
-                            ren_win = self._plotter.render_window  # older attr name
-                        if ren_win is not None:
-                            try:
-                                ren_win.SetMultiSamples(0)
-                            except Exception:
-                                pass
-                            try:
-                                ren = self._plotter.renderer
-                                ren.SetUseDepthPeeling(False)
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
-                    # Clickable camera orientation widget (top-right)
-                    try:
-                        if hasattr(self._plotter, 'add_camera_orientation_widget'):
-                            self._plotter.add_camera_orientation_widget()
-                    except Exception:
-                        pass
-                    # Disable post-process AA entirely to avoid FBO usage
-                    try:
-                        if hasattr(self._plotter, 'disable_anti_aliasing'):
-                            self._plotter.disable_anti_aliasing()
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
-
-                # Periodically pump Qt events so the embedded window stays responsive
-                def _pump_qt():
-                    try:
-                        if QApplication is not None and self._qt_app is not None:
-                            self._qt_app.processEvents()
-                    except Exception:
-                        pass
-                    try:
-                        self.after(16, _pump_qt)
-                    except Exception:
-                        pass
-                _pump_qt()
-
-                self.available = True
-                # First render (even if empty) to draw axes and set camera
-                try:
-                    self.rebuild(self._latest_patches)
-                except Exception:
-                    pass
-                # Install camera callbacks to keep origin axes scaled with zoom
-                try:
-                    self._install_camera_callbacks()
-                except Exception:
-                    pass
-
-            _finalize_embed()
-        except Exception as e:
-            # Robust fallback: open external window with BackgroundPlotter
-            self.error = str(e)
-            self.available = False
-            try:
-                self._ext_plotter = BackgroundPlotter(title='Multi Antenna (PyVista)', auto_update=True)
-            except Exception:
-                self._ext_plotter = None
-            # Provide a focus button in the tab
-            fallback = ttk.Frame(self, style='Modern.TFrame')
-            msg = ttk.Label(fallback, text=(
-                "Embedded 3D viewer failed to initialize (falling back to a separate window).\n"
-                f"Details: {e}\n\nClick the button below to focus the external 3D window."),
-                style='Modern.TLabel', justify='left')
-            msg.pack(pady=(12,8))
-            def _focus_ext():
-                try:
-                    if getattr(self, '_ext_plotter', None) is not None:
-                        self._ext_plotter.show()
-                except Exception:
-                    pass
-            ttk.Button(fallback, text='Focus 3D Window', command=_focus_ext, style='Modern.TButton').pack()
-            fallback.pack(fill='both', expand=True)
-
-    # ---- Utilities ----
-    @staticmethod
-    def _rot_matrix(rx_deg: float, ry_deg: float, rz_deg: float):
-        rx, ry, rz = np.deg2rad([rx_deg, ry_deg, rz_deg])
-        cx, sx = np.cos(rx), np.sin(rx)
-        cy, sy = np.cos(ry), np.sin(ry)
-        cz, sz = np.cos(rz), np.sin(rz)
-        Rx = np.array([[1, 0, 0], [0, cx, -sx], [0, sx, cx]])
-        Ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]])
-        Rz = np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]])
-        return Rx @ Ry @ Rz
-
-    # ---- External PyVista fallback ----
-    def _open_or_focus_external(self):
-        try:
-            import pyvista as pv
-            from pyvistaqt import BackgroundPlotter
-            if self._plotter is None:
-                self._plotter = BackgroundPlotter(title='Multi Antenna (PyVista)', auto_update=True)
-            else:
-                try:
-                    self._plotter.show()
-                except Exception:
-                    pass
-            # Rebuild with latest patches
-            self.rebuild(self._latest_patches)
-        except Exception:
-            pass
-
-    def _pv_box(self, plotter, dims_xyz, center_world, angles_xyz_deg, color_rgb=(1,1,1), opacity=1.0, show_edges=False):
-        try:
-            import pyvista as pv
-            # Build oriented box corners exactly like MultiPatchPanel
-            W, L, H = float(dims_xyz[0]), float(dims_xyz[1]), float(dims_xyz[2])
-            hx, hy, hz = W/2.0, L/2.0, H/2.0
-            local = np.array([
-                [-hx, -hy, -hz], [ hx, -hy, -hz], [ hx,  hy, -hz], [ -hx,  hy, -hz],
-                [-hx, -hy,  hz], [ hx, -hy,  hz], [ hx,  hy,  hz], [ -hx,  hy,  hz],
-            ])
-            rx, ry, rz = angles_xyz_deg
-            R = self._rot_matrix(rx, ry, rz)
-            corners = (local @ R) + np.array(center_world)
-            # Faces connectivity (6 quads)
-            faces = np.hstack([
-                [4, 0,1,2,3],
-                [4, 4,5,6,7],
-                [4, 0,1,5,4],
-                [4, 3,2,6,7],
-                [4, 0,3,7,4],
-                [4, 1,2,6,5],
-            ]).astype(np.int64)
-            mesh = pv.PolyData(corners, faces)
-            plotter.add_mesh(mesh, color=color_rgb, opacity=float(opacity), show_edges=show_edges)
-        except Exception:
-            pass
-
-    def _build_scene_pyvista(self, plotter, patches):
-        try:
-            plotter.clear()
-        except Exception:
-            pass
-        # Ensure the small bottom-left axes actor is removed/disabled
-        try:
-            if hasattr(plotter, 'show_axes'):
-                try:
-                    plotter.show_axes(False)
-                except Exception:
-                    pass
-            a = getattr(plotter, 'axes_actor', None)
-            if a is not None:
-                try:
-                    plotter.remove_actor(a)
-                except Exception:
-                    pass
-                try:
-                    # Fallback remove through renderer
-                    plotter.renderer.RemoveActor(a)
-                except Exception:
-                    pass
-                try:
-                    plotter.axes_actor = None
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        # Reset dynamic axes state on a fresh scene
-        self._axis = {
-            'x': {'mesh': None, 'actor': None},
-            'y': {'mesh': None, 'actor': None},
-            'z': {'mesh': None, 'actor': None},
-        }
-        # Determine characteristic scene length from patches (used for axis scaling)
-        try:
-            dims = []
-            for inst in patches or []:
-                if inst.params.patch_length_m and inst.params.patch_width_m:
-                    dims.append(max(inst.params.patch_length_m, inst.params.patch_width_m))
-                else:
-                    from antenna_sim.physics import design_patch_for_frequency
-                    L_m, W_m, _ = design_patch_for_frequency(inst.params.frequency_hz, inst.params.eps_r, inst.params.h_m)
-                    dims.append(max(L_m, W_m))
-            if dims:
-                self._scene_char_len = max(0.5, max(dims))
-            else:
-                self._scene_char_len = 0.5
-        except Exception:
-            self._scene_char_len = 0.5
-        color_sub = (0.23, 0.65, 0.43)
-        color_gnd = (0.72, 0.45, 0.20)
-        color_patch = (1.0, 0.83, 0.30)
-        color_feed = (1.0, 0.43, 0.24)
-        for inst in patches or []:
-            try:
-                if inst.params.patch_length_m and inst.params.patch_width_m:
-                    L_m = inst.params.patch_length_m; W_m = inst.params.patch_width_m
-                else:
-                    from antenna_sim.physics import design_patch_for_frequency
-                    L_m, W_m, _ = design_patch_for_frequency(inst.params.frequency_hz, inst.params.eps_r, inst.params.h_m)
-                t_patch = max(35e-6, 0.5e-4)
-                t_ground = 35e-6
-                h = inst.params.h_m
-                C = np.array([inst.center_x_m, inst.center_y_m, inst.center_z_m])
-                angles = (inst.rot_x_deg, inst.rot_y_deg, inst.rot_z_deg)
-                R = self._rot_matrix(*angles)
-                margin = 0.35 * max(L_m, W_m)
-                sub_L = L_m + 2*margin
-                sub_W = W_m + 2*margin
-                sub_center = C + (np.array([0,0,-(t_patch/2 + h/2)]) @ R)
-                self._pv_box(plotter, (sub_W, sub_L, h), sub_center, angles, color_rgb=color_sub, opacity=1.0, show_edges=True)
-                gnd_center = C + (np.array([0,0,-(t_patch/2 + h + t_ground/2)]) @ R)
-                self._pv_box(plotter, (sub_W, sub_L, t_ground), gnd_center, angles, color_rgb=color_gnd, opacity=0.98, show_edges=False)
-                self._pv_box(plotter, (W_m, L_m, t_patch), C, angles, color_rgb=color_patch, opacity=1.0, show_edges=False)
-                from antenna_sim.solver_fdtd_openems_microstrip import calculate_microstrip_width, FeedDirection
-                fw = calculate_microstrip_width(inst.params.frequency_hz, inst.params.eps_r, inst.params.h_m)
-                length = 3*fw
-                if inst.feed_direction == FeedDirection.NEG_X:
-                    local_center = np.array([-(W_m/2 + length/2), 0.0, 0.0]); dims = (length, fw, t_patch)
-                elif inst.feed_direction == FeedDirection.POS_X:
-                    local_center = np.array([(W_m/2 + length/2), 0.0, 0.0]); dims = (length, fw, t_patch)
-                elif inst.feed_direction == FeedDirection.NEG_Y:
-                    local_center = np.array([0.0, -(L_m/2 + length/2), 0.0]); dims = (fw, length, t_patch)
-                else:
-                    local_center = np.array([0.0, (L_m/2 + length/2), 0.0]); dims = (fw, length, t_patch)
-                feed_center = C + (local_center @ R)
-                self._pv_box(plotter, dims, feed_center, angles, color_rgb=color_feed, opacity=0.98, show_edges=False)
-            except Exception:
-                pass
-        try:
-            plotter.reset_camera()
-        except Exception:
-            pass
-        # Build/update dynamic origin axes now that the camera is valid
-        try:
-            self._rescale_origin_axes(initial_build=True)
-        except Exception:
-            pass
-
-    def rebuild(self, patches):
-        self._latest_patches = patches
-        if not self.available or self._plotter is None:
-            return
-        # Save camera
-        try:
-            self._camera_snapshot = tuple(self._plotter.camera_position)
-        except Exception:
-            self._camera_snapshot = None
-
-        # Build scene with PyVista
-        try:
-            self._build_scene_pyvista(self._plotter, patches)
-        except Exception:
-            pass
-
-        # Restore camera
-        try:
-            if self._camera_snapshot is None:
-                self._plotter.reset_camera()
-            else:
-                self._plotter.camera_position = self._camera_snapshot
-        except Exception:
-            pass
-
-        # Render
-        try:
-            self._plotter.render()
-        except Exception:
-            pass
-
-    def destroy(self):
-        try:
-            if self._iren_widget is not None:
-                self._iren_widget.Destroy()
-        except Exception:
-            pass
-        super().destroy()
-
-    # ---- Camera/axes helpers ----
-    def _install_camera_callbacks(self):
-        iren = getattr(self._plotter, 'iren', None)
-        if iren is None:
-            return
-        def _evt(obj=None, evt:str=None):
-            try:
-                # Slight debounce by scheduling on Tk loop
-                self.after(0, self._rescale_origin_axes)
-            except Exception:
-                pass
-        try:
-            for ev in ['EndInteractionEvent', 'MouseWheelForwardEvent', 'MouseWheelBackwardEvent', 'InteractionEvent']:
-                try:
-                    iren.AddObserver(ev, _evt)
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-    def _compute_axis_len(self):
-        try:
-            cam = self._plotter.camera
-            import math
-            fp = np.array(cam.focal_point)
-            pos = np.array(cam.position)
-            dist = float(np.linalg.norm(pos - fp))
-            va = float(getattr(cam, 'view_angle', 30.0))
-            height = 2.0 * dist * math.tan(math.radians(va * 0.5))
-            # Use 55% of current view height, with a generous minimum based on scene size
-            return max(1.1 * self._scene_char_len, 0.55 * height)
-        except Exception:
-            return max(1.1 * self._scene_char_len, 0.8)
-
-    def _rescale_origin_axes(self, initial_build=False):
-        if not self.available or self._plotter is None:
-            return
-        try:
-            import pyvista as pv
-            L = float(self._compute_axis_len())
-            # Create or update line meshes
-            def _ensure(axis_key, p0, p1, color):
-                rec = self._axis[axis_key]
-                if rec['mesh'] is None:
-                    rec['mesh'] = pv.Line(p0, p1)
-                    rec['actor'] = self._plotter.add_mesh(rec['mesh'], color=color, line_width=6)
-                else:
-                    rec['mesh'].points[:] = np.array([p0, p1])
-            _ensure('x', (-L,0,0), (L,0,0), (1.0,0.3,0.2))
-            _ensure('y', (0,-L,0), (0,L,0), (0.2,1.0,0.3))
-            _ensure('z', (0,0,-L), (0,0,L), (0.3,0.5,1.0))
-            # No labels; keep the view clean since the orientation widget labels axes
-            # Render
-            if not initial_build:
-                try:
-                    self._plotter.render()
-                except Exception:
-                    pass
-        except Exception:
-            pass
-        
-    def open_multi_patch(self):
-        """Open the Multi Patch Designer window."""
-        try:
-            from antenna_sim.multi_patch_designer import MultiPatchDesigner
-            MultiPatchDesigner(self.winfo_toplevel())
-        except Exception as e:
-            try:
-                messagebox.showerror("Error", f"Failed to open Multi Patch Designer: {e}")
-            except Exception:
-                pass
-        
-    def update_geometry_plot(self, params, solver_type: str = "Simple (Lumped Port)", feed_direction_str: str = "-X"):
-        """Update the geometry visualization"""
-        try:
-            # If in multi mode, skip single-antenna drawing
-            if getattr(self, 'mode', 'single') == 'multi':
-                return
-            print("DEBUG: Starting geometry plot update...")
-            print(f"DEBUG: Params - freq={params.frequency_hz/1e9:.2f}GHz, εr={params.eps_r}, h={params.h_m*1e3:.1f}mm")
-            
-            # Clear existing plot
-            if self.geometry_canvas:
-                print("DEBUG: Destroying existing canvas...")
-                self.geometry_canvas.get_tk_widget().destroy()
-            
-            # Calculate patch dimensions if not provided (same as Streamlit)
-            print("DEBUG: Calculating patch dimensions...")
-            from antenna_sim.physics import design_patch_for_frequency
-            if params.patch_length_m and params.patch_width_m:
-                L_m = params.patch_length_m
-                W_m = params.patch_width_m
-                print(f"DEBUG: Using provided dimensions: L={L_m*1e3:.1f}mm, W={W_m*1e3:.1f}mm")
-            else:
-                L_m, W_m, _ = design_patch_for_frequency(params.frequency_hz, params.eps_r, params.h_m)
-                print(f"DEBUG: Calculated dimensions: L={L_m*1e3:.1f}mm, W={W_m*1e3:.1f}mm")
-            
-            # Create enhanced geometry plot
-            print("DEBUG: Creating enhanced geometry plot...")
-            if solver_type == "Microstrip Fed (MSL Port)" or solver_type == "Microstrip Fed (MSL Port, 3D)":
-                # Base geometry
-                geometry_fig = draw_patch_3d_geometry(L_m, W_m, params.h_m, fig_size=(8, 6), show_labels=False)
-                ax_back = geometry_fig.gca()
-                ax_overlay = ax_back
-                # Overlay a simple 50Ω microstrip trace matching FDTD coordinates
-                feed_direction = FeedDirection(feed_direction_str)
-                feed_width_m = calculate_microstrip_width(params.frequency_hz, params.eps_r, params.h_m)
-                feed_width_mm = feed_width_m * 1e3
-                # Substrate outline (same as plotting.py)
-                mm = 1e3
-                L = L_m * mm
-                W = W_m * mm
-                h = params.h_m * mm
-                margin = max(5.0, 0.2 * max(L, W))
-                sub_L = L + 2 * margin
-                sub_W = W + 2 * margin
-                z_plane = 0.02  # slightly above patch plane for visibility
-                if feed_direction == FeedDirection.NEG_X:
-                    feed_start = [-sub_L/2, -feed_width_mm/2, z_plane]
-                    feed_stop  = [-L/2,     +feed_width_mm/2, z_plane]
-                elif feed_direction == FeedDirection.POS_X:
-                    feed_start = [ L/2,     -feed_width_mm/2, z_plane]
-                    feed_stop  = [ sub_L/2, +feed_width_mm/2, z_plane]
-                elif feed_direction == FeedDirection.NEG_Y:
-                    feed_start = [-feed_width_mm/2, -sub_W/2, z_plane]
-                    feed_stop  = [ +feed_width_mm/2, -W/2,   z_plane]
-                else:  # POS_Y
-                    feed_start = [-feed_width_mm/2, W/2,   z_plane]
-                    feed_stop  = [ +feed_width_mm/2, sub_W/2, z_plane]
-                # Draw the microstrip as a small 3D box (prism) for better realism
-                from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-                # Use the same copper thickness as the patch rendering for consistency
-                t = max(0.08, 0.06 * h)  # mm
-                x0, y0 = feed_start[0], feed_start[1]
-                x1, y1 = feed_stop[0], feed_stop[1]
-                z0, z1 = z_plane, z_plane + t
-                # Build prism faces depending on orientation
-                if abs(x1 - x0) > abs(y1 - y0):
-                    # strip along X
-                    verts = [
-                        # bottom
-                        [[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0]],
-                        # top
-                        [[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]],
-                        # sides
-                        [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]],
-                        [[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]],
-                        [[x0, y0, z0], [x0, y1, z0], [x0, y1, z1], [x0, y0, z1]],
-                        [[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]],
-                    ]
-                else:
-                    # strip along Y
-                    verts = [
-                        # bottom
-                        [[x0, y0, z0], [x0, y1, z0], [x1, y1, z0], [x1, y0, z0]],
-                        # top
-                        [[x0, y0, z1], [x0, y1, z1], [x1, y1, z1], [x1, y0, z1]],
-                        # sides
-                        [[x0, y0, z0], [x0, y1, z0], [x0, y1, z1], [x0, y0, z1]],
-                        [[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]],
-                        [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]],
-                        [[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]],
-                    ]
-                strip = Poly3DCollection(verts, alpha=0.99, facecolor='#ff6f3d', edgecolor='#a74323', linewidth=0.9)
-                try:
-                    strip.set_zsort('max')
-                except Exception:
-                    pass
-                strip.set_zorder(10)
-                ax_overlay.add_collection3d(strip)
-                # Draw a top cap to guarantee the top face always renders above the substrate
-                top_cap = Poly3DCollection([[
-                    [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]
-                ]], alpha=1.0, facecolor='#ff6f3d', edgecolor='#a74323', linewidth=0.7)
-                try:
-                    top_cap.set_zsort('max')
-                except Exception:
-                    pass
-                top_cap.set_zorder(11)
-                ax_overlay.add_collection3d(top_cap)
-                # Also draw a patch top cap on overlay axis to avoid blending artifacts
-                patch_thickness = max(0.08, 0.06 * h)
-                patch_cap = Poly3DCollection([[[-L/2, -W/2, patch_thickness], [L/2, -W/2, patch_thickness], [L/2, W/2, patch_thickness], [-L/2, W/2, patch_thickness]]],
-                                             alpha=1.0, facecolor='#ffd24d', edgecolor='#b8860b', linewidth=0.9)
-                try:
-                    patch_cap.set_zsort('max')
-                except Exception:
-                    pass
-                patch_cap.set_zorder(12)
-                ax_overlay.add_collection3d(patch_cap)
-                print(f"DEBUG: Microstrip overlay added dir={feed_direction} width={feed_width_mm:.2f} mm")
-                ax_main = ax_back
-            else:
-                # Simple patch visualization (original approach)
-                geometry_fig = draw_patch_3d_geometry(L_m, W_m, params.h_m, fig_size=(8, 6), show_labels=True)
-                print("DEBUG: Simple patch geometry created")
-                ax_overlay = None
-                ax_main = geometry_fig.gca()
-            print("DEBUG: Enhanced geometry plot created successfully")
-            
-            # Convert matplotlib figure to tkinter-compatible figure
-            print("DEBUG: Converting to tkinter figure...")
-            # Get the axes from the created figure
-            ax = geometry_fig.gca()
-            overlay_ax = None
-            
-            # Style the plot to match dark theme
-            print("DEBUG: Applying dark theme styling...")
-            geometry_fig.patch.set_facecolor('#2b2b2b')
-            ax.set_facecolor('#2b2b2b')
-            ax.tick_params(colors='white')
-            ax.xaxis.label.set_color('white')
-            ax.yaxis.label.set_color('white')
-            ax.zaxis.label.set_color('white')
-            ax.xaxis.pane.fill = False
-            ax.yaxis.pane.fill = False
-            ax.zaxis.pane.fill = False
-            ax.grid(True, alpha=0.3)
-            
-            # Update title with frequency info
-            ax.set_title(f'Patch Antenna Geometry\n{params.frequency_hz/1e9:.2f} GHz, εr={params.eps_r}', 
-                        color='white', fontsize=12, pad=20)
-
-            # Add dimension labels LAST so they are always on top
-            try:
-                mm = 1e3
-                L = L_m * mm
-                W = W_m * mm
-                h = params.h_m * mm
-                margin = max(5.0, 0.2 * max(L, W))
-                label_box = dict(boxstyle='round,pad=0.3', fc='black', ec='none', alpha=0.65)
-                import matplotlib.patheffects as pe
-                # draw labels on main axes for the simple view; overlay if available (microstrip view)
-                label_ax = ax_overlay if ax_overlay is not None else ax
-                txt1 = label_ax.text(0, -W/2-0.9*margin, 0.08*h, f'L = {L:.1f} mm', ha='center', fontsize=13, color='white', bbox=label_box)
-                txt2 = label_ax.text(L/2+0.9*margin, 0, 0.08*h, f'W = {W:.1f} mm', ha='center', rotation=90, fontsize=13, color='white', bbox=label_box)
-                for t in (txt1, txt2):
-                    t.set_zorder(100)
-                    t.set_path_effects([pe.withStroke(linewidth=1.5, foreground='black')])
-            except Exception:
-                pass
-            
-            geometry_fig.tight_layout()
-            print("DEBUG: Dark theme styling complete")
-            # Corner triad overlay (top-left) to replace the in-scene axes
-            ax_triad = None
-            try:
-                inset_rect = [0.06, 0.78, 0.12, 0.16]  # top-left corner
-                ax_triad = geometry_fig.add_axes(inset_rect, projection='3d')
-                ax_triad.set_axis_off(); ax_triad.patch.set_alpha(0)
-                ax_triad.set_xlim([-0.05, 1.05]); ax_triad.set_ylim([-0.05, 1.05]); ax_triad.set_zlim([-0.05, 1.05])
-                try: ax_triad.set_box_aspect([1,1,1])
-                except Exception: pass
-                arrow_kw = dict(length=1.0, normalize=True, arrow_length_ratio=0.2, linewidth=2.2)
-                ax_triad.quiver(0,0,0, 1,0,0, color='red', **arrow_kw)
-                ax_triad.quiver(0,0,0, 0,1,0, color='green', **arrow_kw)
-                ax_triad.quiver(0,0,0, 0,0,1, color='blue', **arrow_kw)
-                ax_triad.text(1.02,0,0,'x', color='red', weight='bold')
-                ax_triad.text(0,1.02,0,'y', color='green', weight='bold')
-                ax_triad.text(0,0,1.02,'z', color='blue', weight='bold')
-            except Exception:
-                ax_triad = None
-            
-            # Synchronize triad with main axes during user rotations
-            try:
-                if True:
-                    def _sync_views(event=None):
-                        try:
-                            elev = getattr(ax, 'elev', 22)
-                            azim = getattr(ax, 'azim', -45)
-                            # keep labels on overlay updated if axes changed limits
-                            if ax_triad is not None:
-                                ax_triad.view_init(elev=elev, azim=azim)
-                            self.geometry_canvas.draw_idle()
-                        except Exception:
-                            pass
-                    geometry_fig.canvas.mpl_connect('motion_notify_event', _sync_views)
-                    geometry_fig.canvas.mpl_connect('button_release_event', _sync_views)
-                    geometry_fig.canvas.mpl_connect('scroll_event', _sync_views)
-            except Exception:
-                pass
-
-            # Add to GUI
-            print("DEBUG: Adding canvas to GUI...")
-            self.geometry_canvas = FigureCanvasTkAgg(geometry_fig, self.geometry_frame)
-            self.geometry_canvas.get_tk_widget().pack(fill='both', expand=True)
-            self.geometry_canvas.draw()
-            # Expose for zoom controls and mouse scroll
-            self._geom_ax = ax
-            self._geom_canvas = self.geometry_canvas
-            def _on_scroll(event):
-                try:
-                    factor = 0.9 if event.button == 'up' else 1.1
-                    xlim = ax.get_xlim(); ylim = ax.get_ylim(); zlim = ax.get_zlim()
-                    def _scale(lims):
-                        c = 0.5*(lims[0]+lims[1]); r = 0.5*(lims[1]-lims[0]); r *= factor; return (c-r, c+r)
-                    ax.set_xlim(_scale(xlim)); ax.set_ylim(_scale(ylim)); ax.set_zlim(_scale(zlim))
-                    self.geometry_canvas.draw_idle()
-                except Exception:
-                    pass
-            geometry_fig.canvas.mpl_connect('scroll_event', _on_scroll)
-            
-            # Force GUI update
-            self.geometry_canvas.get_tk_widget().update_idletasks()
-            print("DEBUG: Geometry plot update complete!")
-            
-        except Exception as e:
-            print(f"❌ ERROR updating geometry plot: {e}")
-            import traceback
-            traceback.print_exc()
-    
-    def update_2d_patterns(self, theta, intensity):
-        """Update 2D radiation pattern plots - EXACT copy of Streamlit version"""
-        try:
-            # Multi mode: show placeholder and exit
-            if getattr(self, 'mode', 'single') == 'multi':
-                self._show_multi_placeholder('2d')
-                return
-            # In single mode ensure placeholder is hidden
-            self._hide_multi_placeholder('2d')
-            # Clear existing plot
-            if self.pattern_2d_canvas:
-                self.pattern_2d_canvas.get_tk_widget().destroy()
-            
-            if intensity.ndim == 2 and intensity.shape[1] >= 2:
-                # Extract E-plane and H-plane - EXACT same as Streamlit
-                th_deg = np.rad2deg(theta)
-                E_plane = intensity[:, 0]  # phi=0 (E-plane)
-                H_plane = intensity[:, 1] if intensity.shape[1] > 1 else intensity[:, 0]  # phi=90 (H-plane)
-                
-                # Need to extend pattern to full 360° for proper polar display - EXACT same as Streamlit
-                # The current theta goes 0° to 180°, but we need full circle
-                # Mirror the pattern: 0°-180° data becomes 0°-180° and 180°-360°
-                th_full = np.concatenate([th_deg, th_deg[1:] + 180])  # 0°..360° (open)
-                E_full = np.concatenate([E_plane, E_plane[1:][::-1]])  # Mirror E-plane
-                H_full = np.concatenate([H_plane, H_plane[1:][::-1]])  # Mirror H-plane
-                # Close the curves to avoid a gap at 0°/+Z
-                th_closed = np.concatenate([th_full, [360.0]])
-                E_closed = np.concatenate([E_full, [E_full[0]]])
-                H_closed = np.concatenate([H_full, [H_full[0]]])
-                
-                # Create polar plots - same size as 3D plot (20x10) - EXACT same as Streamlit
-                fig = Figure(figsize=(20*0.8, 10*0.8), facecolor='#2b2b2b')  # Using ui_scale=0.8 equivalent
-                ax1 = fig.add_subplot(121, projection='polar', facecolor='#2b2b2b')
-                ax2 = fig.add_subplot(122, projection='polar', facecolor='#2b2b2b')
-                
-                # E-plane (phi=0°) - full 360° - EXACT same as Streamlit
-                ax1.plot(np.deg2rad(th_closed), E_closed, 'r-', linewidth=3, label='E-plane (phi=0°)')
-                ax1.set_title('E-plane (ZX, phi=0°)', fontsize=14, pad=25, color='white')
-                ax1.set_theta_zero_location('N')
-                ax1.set_theta_direction(-1)
-                ax1.grid(True, alpha=0.3)
-                ax1.set_ylim([max(-20, np.min(E_full)-2), np.max(E_full)+2])
-                # Add coordinate labels next to degrees - E-plane cuts through X direction
-                ax1.set_thetagrids([0, 45, 90, 135, 180, 225, 270, 315], 
-                                 ["0°\n(+Z)", "45°", "90°\n(+X)", "135°", "180°\n(-Z)", "225°", "270°\n(-X)", "315°"])
-                ax1.tick_params(colors='white')
-                
-                # H-plane (phi=90°) - full 360° - EXACT same as Streamlit
-                ax2.plot(np.deg2rad(th_closed), H_closed, 'b-', linewidth=3, label='H-plane (phi=90°)')
-                ax2.set_title('H-plane (YZ, phi=90°)', fontsize=14, pad=25, color='white')
-                ax2.set_theta_zero_location('N')
-                ax2.set_theta_direction(-1)
-                ax2.grid(True, alpha=0.3)
-                ax2.set_ylim([max(-20, np.min(H_full)-2), np.max(H_full)+2])
-                # Add coordinate labels next to degrees - H-plane cuts through Y direction
-                ax2.set_thetagrids([0, 45, 90, 135, 180, 225, 270, 315], 
-                                 ["0°\n(+Z)", "45°", "90°\n(+Y)", "135°", "180°\n(-Z)", "225°", "270°\n(-Y)", "315°"])
-                ax2.tick_params(colors='white')
-                
-                fig.tight_layout()
-                
-                # Add to GUI
-                self.pattern_2d_canvas = FigureCanvasTkAgg(fig, self.pattern_2d_frame)
-                self.pattern_2d_canvas.get_tk_widget().pack(fill='both', expand=True)
-                self.pattern_2d_canvas.draw()
-            else:
-                print(f"Data shape: {intensity.shape} - Cannot extract plane cuts")
-            
-        except Exception as e:
-            print(f"Error updating 2D patterns: {e}")
-            import traceback
-            traceback.print_exc()
-    
-    def update_3d_pattern(self, theta, phi, intensity, params):
-        """Update 3D radiation pattern plot - EXACT copy of Streamlit version"""
-        try:
-            # Multi mode: show placeholder and exit
-            if getattr(self, 'mode', 'single') == 'multi':
-                self._show_multi_placeholder('3d')
-                return
-            # In single mode ensure placeholder is hidden
-            self._hide_multi_placeholder('3d')
-            # Clear existing plot
-            if self.pattern_3d_canvas:
-                self.pattern_3d_canvas.get_tk_widget().destroy()
-            
-            if intensity.ndim == 2 and intensity.shape[1] >= 2:
-                # We have E-plane (phi=0°) and H-plane (phi=90°) cuts - EXACT same as Streamlit
-                # Create a full 3D pattern by interpolating/extending these cuts
-                
-                th_deg = np.rad2deg(theta)  # theta in degrees
-                E_plane_data = intensity[:, 0]  # phi=0° cut
-                H_plane_data = intensity[:, 1]  # phi=90° cut
-                
-                # Create full phi range for 3D visualization (0° to 360°) - EXACT same as Streamlit
-                phi_full = np.linspace(0, 2*np.pi, 73)  # 73 points = 5° resolution
-                phi_full_deg = np.rad2deg(phi_full)
-                
-                # Create full 3D pattern by interpolating between E and H planes - EXACT same as Streamlit
+            # Case B: E/H-plane cuts available – synthesize globe
+            elif intensity.ndim == 2 and intensity.shape[1] >= 2:
+                E_plane_data = intensity[:, 0]
+                H_plane_data = intensity[:, 1]
+                phi_full = np.linspace(0, 2*np.pi, 73)
                 pattern_3d = np.zeros((len(theta), len(phi_full)))
-                
                 for i, phi_val in enumerate(phi_full):
-                    # Interpolate between E-plane (0°/180°) and H-plane (90°/270°)
-                    phi_norm = (phi_val % (2*np.pi))  # Normalize to [0, 2π]
-                    
-                    if phi_norm <= np.pi/2:  # 0° to 90°
+                    phi_norm = (phi_val % (2*np.pi))
+                    if phi_norm <= np.pi/2:
                         weight = phi_norm / (np.pi/2)
                         pattern_3d[:, i] = (1-weight) * E_plane_data + weight * H_plane_data
-                    elif phi_norm <= np.pi:  # 90° to 180°
+                    elif phi_norm <= np.pi:
                         weight = (phi_norm - np.pi/2) / (np.pi/2)
                         pattern_3d[:, i] = (1-weight) * H_plane_data + weight * E_plane_data
-                    elif phi_norm <= 3*np.pi/2:  # 180° to 270°
+                    elif phi_norm <= 3*np.pi/2:
                         weight = (phi_norm - np.pi) / (np.pi/2)
                         pattern_3d[:, i] = (1-weight) * E_plane_data + weight * H_plane_data
-                    else:  # 270° to 360°
+                    else:
                         weight = (phi_norm - 3*np.pi/2) / (np.pi/2)
                         pattern_3d[:, i] = (1-weight) * H_plane_data + weight * E_plane_data
-                
-                # Convert to spherical coordinates for 3D plotting - EXACT same as Streamlit
                 TH, PH = np.meshgrid(theta, phi_full, indexing='ij')
-                
-                # Normalize pattern for radius (linear scale, 0 to 1) - EXACT same as Streamlit
-                pattern_norm = pattern_3d - np.max(pattern_3d)  # Normalize to peak = 0 dB
-                pattern_linear = np.maximum(0.01, 10**(pattern_norm/20))  # Convert to linear, min 0.01
-                
-                # Convert to Cartesian coordinates - EXACT same as Streamlit
+                pattern_norm = pattern_3d - np.max(pattern_3d)
+                pattern_linear = np.maximum(0.01, 10**(pattern_norm/20))
                 X = pattern_linear * np.sin(TH) * np.cos(PH)
-                Y = pattern_linear * np.sin(TH) * np.sin(PH) 
+                Y = pattern_linear * np.sin(TH) * np.sin(PH)
                 Z = pattern_linear * np.cos(TH)
-                
-                # Create the 3D plot - EXACT same as Streamlit
-                fig_3d = Figure(figsize=(10*0.8, 8*0.8), facecolor='#2b2b2b')  # Using ui_scale=0.8 equivalent
-                ax_3d = fig_3d.add_subplot(111, projection='3d')
-                ax_3d.set_facecolor('#2b2b2b')
-                
-                # Plot the 3D surface with color mapping - EXACT same as Streamlit
-                surf = ax_3d.plot_surface(
+
+                fig_3d = Figure(figsize=(8, 6), facecolor='#2b2b2b')
+                ax_3d = fig_3d.add_subplot(111, projection='3d'); ax_3d.set_facecolor('#2b2b2b')
+                ax_3d.plot_surface(
                     X, Y, Z,
-                    facecolors=plt.cm.jet((pattern_3d - np.min(pattern_3d)) / (np.max(pattern_3d) - np.min(pattern_3d))),
-                    linewidth=0,
-                    antialiased=True,
-                    alpha=0.8,
+                    facecolors=plt.cm.jet((pattern_3d - np.min(pattern_3d)) / max(1e-9, (np.max(pattern_3d) - np.min(pattern_3d)))),
+                    linewidth=0, antialiased=True, alpha=0.8,
                 )
-                
-                # Add patch antenna at the bottom - EXACT same as Streamlit
-                patch_size = 0.15
-                patch_x = [-patch_size/2, patch_size/2, patch_size/2, -patch_size/2, -patch_size/2]
-                patch_y = [-patch_size/3, -patch_size/3, patch_size/3, patch_size/3, -patch_size/3]
-                patch_z = [-0.9, -0.9, -0.9, -0.9, -0.9]
-                ax_3d.plot(patch_x, patch_y, patch_z, color='orange', linewidth=3, label='Patch Antenna')
-                
-                # Ground plane - EXACT same as Streamlit
-                ground_size = 0.3
-                ax_3d.plot([-ground_size, ground_size], [-ground_size, -ground_size], [-1.0, -1.0], color='gray', linewidth=2)
-                ax_3d.plot([-ground_size, ground_size], [ground_size, ground_size], [-1.0, -1.0], color='gray', linewidth=2)
-                ax_3d.plot([-ground_size, -ground_size], [-ground_size, ground_size], [-1.0, -1.0], color='gray', linewidth=2)
-                ax_3d.plot([ground_size, ground_size], [-ground_size, ground_size], [-1.0, -1.0], color='gray', linewidth=2)
-                
-                # Coordinate system arrows - EXACT same as Streamlit
-                ax_3d.quiver(0, 0, -1.0, 0.3, 0, 0, color='red', arrow_length_ratio=0.1, linewidth=2, label='+X')
-                ax_3d.quiver(0, 0, -1.0, 0, 0.3, 0, color='green', arrow_length_ratio=0.1, linewidth=2, label='+Y')
-                ax_3d.quiver(0, 0, -1.0, 0, 0, 0.3, color='blue', arrow_length_ratio=0.1, linewidth=2, label='+Z')
-                
-                # Labels and formatting - EXACT same as Streamlit
-                ax_3d.set_xlabel('X', fontsize=12, color='white')
-                ax_3d.set_ylabel('Y', fontsize=12, color='white')
+                ax_3d.set_xlabel('X', fontsize=12, color='white'); ax_3d.set_ylabel('Y', fontsize=12, color='white'); ax_3d.set_zlabel('Z', fontsize=12, color='white')
+                ax_3d.set_title(f'3D Radiation Pattern\nMax Gain: {np.max(pattern_3d):.1f} dBi @ {params.frequency_hz/1e9:.2f} GHz', fontsize=14, pad=20, color='white')
+                ax_3d.tick_params(colors='white'); ax_3d.xaxis.pane.fill = False; ax_3d.yaxis.pane.fill = False; ax_3d.zaxis.pane.fill = False
+                max_range = 1.2
+                ax_3d.set_xlim([-max_range, max_range]); ax_3d.set_ylim([-max_range, max_range]); ax_3d.set_zlim([-1.1, max_range])
+                ax_3d.view_init(elev=20, azim=-60)
+            X = R * np.sin(TH) * np.cos(PH)
+            Y = R * np.sin(TH) * np.sin(PH)
+            Z = R * np.cos(TH)
+
+            fig_3d = Figure(figsize=(10*0.8, 8*0.8), facecolor='#2b2b2b')
+            ax_3d = fig_3d.add_subplot(111, projection='3d')
+            ax_3d.set_facecolor('#2b2b2b')
+
+            # Color by dB (plasma)
+            db = patt_norm_db
+            try:
+                db_min = float(np.nanpercentile(db, 10))
+            except Exception:
+                db_min = -20.0
+            db_clipped = np.clip(db, db_min, 0.0)
+            norm = (db_clipped - db_min) / max(1e-9, (0.0 - db_min))
+            colors = plt.cm.plasma(norm)
+            ax_3d.plot_surface(X, Y, Z, facecolors=colors, linewidth=0, antialiased=True, alpha=0.95)
+
+            # Axes and labels
+            ax_3d.tick_params(colors='white')
+            ax_3d.xaxis.pane.fill = False
+            ax_3d.yaxis.pane.fill = False
+            ax_3d.zaxis.pane.fill = False
+            ax_3d.set_xlabel('X', fontsize=12, color='white')
+            ax_3d.set_ylabel('Y', fontsize=12, color='white')
+            ax_3d.set_zlabel('Z', fontsize=12, color='white')
+            ax_3d.set_title(f'3D Radiation Pattern (normalized)\n{params.frequency_hz/1e9:.2f} GHz', fontsize=14, pad=20, color='white')
+            max_range = 1.2
+            ax_3d.set_xlim([-max_range, max_range]); ax_3d.set_ylim([-max_range, max_range]); ax_3d.set_zlim([-1.1, max_range])
+            ax_3d.view_init(elev=20, azim=-60)
+
+            # Colorbar in dB relative to max
+            m = plt.cm.ScalarMappable(cmap=plt.cm.plasma)
+            m.set_array(db_clipped)
+            cbar = fig_3d.colorbar(m, ax=ax_3d, shrink=0.8, aspect=20)
+            cbar.set_label('Gain (dB rel. max)', fontsize=12, color='white')
+            cbar.ax.tick_params(colors='white')
+
+            fig_3d.tight_layout()
+            self.pattern_3d_canvas = FigureCanvasTkAgg(fig_3d, self.pattern_3d_frame)
+            self.pattern_3d_canvas.get_tk_widget().pack(fill='both', expand=True)
+            self.pattern_3d_canvas.draw()
+            # Expose for zoom and scroll
+            self._p3d_ax = ax_3d; self._p3d_canvas = self.pattern_3d_canvas
+            def _on_scroll_3d(event):
+                try:
+                    factor = 0.9 if event.button == 'up' else 1.1
+                    xlim = ax_3d.get_xlim(); ylim = ax_3d.get_ylim(); zlim = ax_3d.get_zlim()
+                    def _scale(lims):
+                        c = 0.5*(lims[0]+lims[1]); r = 0.5*(lims[1]-lims[0]); r *= factor; return (c-r, c+r)
+                    ax_3d.set_xlim(_scale(xlim)); ax_3d.set_ylim(_scale(ylim)); ax_3d.set_zlim(_scale(zlim))
+                    self.pattern_3d_canvas.draw_idle()
+                except Exception:
                 ax_3d.set_zlabel('Z', fontsize=12, color='white')
                 ax_3d.set_title(f'3D Radiation Pattern\nMax Gain: {np.max(pattern_3d):.1f} dBi @ {params.frequency_hz/1e9:.2f} GHz', 
                                fontsize=14, pad=20, color='white')
@@ -2267,14 +1352,13 @@ class AntennaSimulatorGUI:
             dll_path = self.param_frame.vars['dll_path'].get()
             solver_type = self.param_frame.vars['solver_type'].get()
             is_microstrip = "Microstrip" in solver_type
+            is_multi = getattr(self.plot_frame, 'mode', 'single') == 'multi'
             
-            # Import appropriate solver functions
-            if is_microstrip:
-                from antenna_sim.solver_fdtd_openems_microstrip import probe_openems_microstrip
-                probe_func = probe_openems_microstrip
+            # Import appropriate probe function
+            if is_multi or is_microstrip:
+                from antenna_sim.solver_fdtd_openems_microstrip import probe_openems_microstrip as probe_func
             else:
-                from antenna_sim.solver_fdtd_openems_fixed import probe_openems_fixed
-                probe_func = probe_openems_fixed
+                from antenna_sim.solver_fdtd_openems_fixed import probe_openems_fixed as probe_func
             
             # Probe openEMS
             print(f"Probing openEMS at: {dll_path}")
@@ -2288,11 +1372,20 @@ class AntennaSimulatorGUI:
                 self.param_frame.set_params_state('disabled')
             except Exception:
                 pass
+            # In Multi mode, lock the Multi Patch Controls panel as well
+            try:
+                if is_multi and getattr(self.plot_frame, 'multi_panel', None) is not None:
+                    self.root.after(0, lambda: self.plot_frame.multi_panel.lock_controls())
+            except Exception:
+                pass
             self.root.after(0, lambda: self.control_frame.set_status("Preparing simulation..."))
             
             # Prepare simulation
-            solver_name = "microstrip" if is_microstrip else "simple"
-            print(f"Preparing {solver_name} simulation...")
+            if is_multi:
+                print("Preparing multi-antenna microstrip 3D simulation...")
+            else:
+                solver_name = "microstrip" if is_microstrip else "simple"
+                print(f"Preparing {solver_name} simulation...")
 
             # disable parameter edits while running
             try:
@@ -2308,7 +1401,31 @@ class AntennaSimulatorGUI:
             except Exception:
                 pass
 
-            if is_microstrip:
+            if is_multi:
+                # Multi-antenna always uses microstrip 3D variant
+                try:
+                    patches = list(getattr(self.plot_frame.multi_panel, 'patches', []) or [])
+                except Exception:
+                    patches = []
+                if not patches:
+                    raise Exception("No antennas in Multi view. Add at least one patch before running FDTD.")
+                from antenna_sim.solver_fdtd_openems_microstrip_multi_3d import prepare_openems_microstrip_multi_3d
+                # Prefer theta/phi step from the multi panel if present
+                try:
+                    theta_step = float(getattr(self.plot_frame.multi_panel, 'var_theta_step', None).get())
+                    phi_step = float(getattr(self.plot_frame.multi_panel, 'var_phi_step', None).get())
+                except Exception:
+                    theta_step = self.param_frame.vars['theta_step'].get()
+                    phi_step = self.param_frame.vars['phi_step'].get()
+                prepared = prepare_openems_microstrip_multi_3d(
+                    patches,
+                    dll_dir=dll_path,
+                    boundary=self.param_frame.vars['boundary'].get(),
+                    theta_step_deg=theta_step,
+                    phi_step_deg=phi_step,
+                    verbose=1,
+                )
+            elif is_microstrip:
                 from antenna_sim.solver_fdtd_openems_microstrip import FeedDirection
                 if solver_type == "Microstrip Fed (MSL Port, 3D)":
                     from antenna_sim.solver_fdtd_openems_microstrip_3d import prepare_openems_microstrip_patch_3d as prepare_openems_microstrip_patch
@@ -2394,21 +1511,33 @@ class AntennaSimulatorGUI:
             print("This may take 30-60 seconds...")
             
             # Run simulation without re-routing stdout to avoid recursion issues
-            if is_microstrip:
-                    if solver_type == "Microstrip Fed (MSL Port, 3D)":
-                        from antenna_sim.solver_fdtd_openems_microstrip_3d import run_prepared_openems_microstrip_3d
-                        result = run_prepared_openems_microstrip_3d(
-                            prepared,
-                            frequency_hz=self.current_params.frequency_hz,
-                            verbose=2
-                        )
-                    else:
-                        from antenna_sim.solver_fdtd_openems_microstrip import run_prepared_openems_microstrip
-                        result = run_prepared_openems_microstrip(
-                            prepared,
-                            frequency_hz=self.current_params.frequency_hz,
-                            verbose=2
-                        )
+            if is_multi:
+                from antenna_sim.solver_fdtd_openems_microstrip_multi_3d import run_prepared_openems_microstrip_multi_3d
+                try:
+                    patches = list(getattr(self.plot_frame.multi_panel, 'patches', []) or [])
+                    f_multi = patches[0].params.frequency_hz if patches else self.current_params.frequency_hz
+                except Exception:
+                    f_multi = self.current_params.frequency_hz
+                result = run_prepared_openems_microstrip_multi_3d(
+                    prepared,
+                    frequency_hz=f_multi,
+                    verbose=2
+                )
+            elif is_microstrip:
+                if solver_type == "Microstrip Fed (MSL Port, 3D)":
+                    from antenna_sim.solver_fdtd_openems_microstrip_3d import run_prepared_openems_microstrip_3d
+                    result = run_prepared_openems_microstrip_3d(
+                        prepared,
+                        frequency_hz=self.current_params.frequency_hz,
+                        verbose=2
+                    )
+                else:
+                    from antenna_sim.solver_fdtd_openems_microstrip import run_prepared_openems_microstrip
+                    result = run_prepared_openems_microstrip(
+                        prepared,
+                        frequency_hz=self.current_params.frequency_hz,
+                        verbose=2
+                    )
             else:
                 from antenna_sim.solver_fdtd_openems_fixed import run_prepared_openems_fixed
                 result = run_prepared_openems_fixed(
@@ -2446,6 +1575,13 @@ class AntennaSimulatorGUI:
                 self.root.after(0, lambda: self.param_frame.set_params_state('normal'))
             except Exception:
                 pass
+            # Unlock Multi Patch Controls if present
+            try:
+                if getattr(self.plot_frame, 'mode', 'single') == 'multi' and getattr(self.plot_frame, 'multi_panel', None) is not None:
+                    self.root.after(0, lambda: self.plot_frame.multi_panel.unlock_controls())
+            except Exception:
+                pass
+
             # re-enable parameter edits after simulation
             try:
                 for w in (self.param_frame,):

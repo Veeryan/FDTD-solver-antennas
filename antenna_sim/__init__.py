@@ -20,6 +20,11 @@ from .solver_fdtd_openems_microstrip import (
     FeedDirection,
     calculate_microstrip_width,
 )
+# Multi-antenna microstrip 3D solver
+from .solver_fdtd_openems_microstrip_multi_3d import (
+    prepare_openems_microstrip_multi_3d,
+    run_prepared_openems_microstrip_multi_3d,
+)
 # 2D solver removed - 3D solver provides E-plane/H-plane cuts automatically
 
 __all__ = [
@@ -46,4 +51,7 @@ __all__ = [
     "run_prepared_openems_microstrip",
     "FeedDirection",
     "calculate_microstrip_width",
+    # Multi-antenna microstrip 3D solver
+    "prepare_openems_microstrip_multi_3d",
+    "run_prepared_openems_microstrip_multi_3d",
 ]
