@@ -82,6 +82,7 @@ def prepare_openems_microstrip_multi_3d(
     boundary: str = "MUR",
     theta_step_deg: float = 2.0,
     phi_step_deg: float = 5.0,
+    mesh_quality: int = 3,
     feed_line_length_mm: float = 20.0,
     work_dir: str = "openems_out_multi",
     cleanup: bool = True,
@@ -176,7 +177,15 @@ def prepare_openems_microstrip_multi_3d(
         mesh.AddLine('y', [-SimBox_Y/2, SimBox_Y/2])
         mesh.AddLine('z', [-SimBox_Z/3, SimBox_Z*2/3])
 
-        mesh_res = C0 / (f0 + fc) / unit / 20
+        # Mesh resolution driven by quality level (points-per-wavelength)
+        try:
+            q = int(mesh_quality)
+        except Exception:
+            q = 3
+        q = max(1, min(5, q))
+        ppw_map = {1: 12.0, 2: 16.0, 3: 20.0, 4: 25.0, 5: 32.0}
+        ppw = ppw_map.get(q, 20.0)
+        mesh_res = C0 / (f0 + fc) / unit / ppw
 
         # Shared theta/phi sampling
         theta = np.arange(0.0, 181.0, max(0.5, float(theta_step_deg)))

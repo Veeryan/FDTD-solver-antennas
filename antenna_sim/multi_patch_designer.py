@@ -172,7 +172,8 @@ class MultiPatchPanel(ttk.Frame):
         self._control_widgets.append(grd)
         self._original_states[grd] = 'readonly'
 
-        # Far-field sampling controls used by the multi-antenna solver
+        # --- Simulation Parameters ---
+        ttk.Label(parent, text="Simulation Parameters", font=("Segoe UI", 12, "bold")).pack(fill='x', padx=10, pady=(10, 6))
         ff = ttk.LabelFrame(parent, text="Far-Field Sampling")
         ff.pack(fill='x', padx=10, pady=(0, 10))
         try:
@@ -191,13 +192,41 @@ class MultiPatchPanel(ttk.Frame):
         self._original_states[e_th] = 'normal'
         self._original_states[e_ph] = 'normal'
         ttk.Label(ff, text="Tip: smaller steps increase simulation time").grid(row=2, column=0, columnspan=2, sticky='w', pady=(4,0))
+        # Enter-to-apply for sampling
+        try:
+            e_th.bind('<Return>', lambda ev: self._apply_sim_params())
+            e_ph.bind('<Return>', lambda ev: self._apply_sim_params())
+        except Exception:
+            pass
+
+        # Mesh quality control (1..5)
+        mesh_frame = ttk.LabelFrame(parent, text="Mesh Quality")
+        mesh_frame.pack(fill='x', padx=10, pady=(0, 10))
+        ttk.Label(mesh_frame, text="Resolution").grid(row=0, column=0, sticky='w')
+        self.var_mesh_quality = tk.IntVar(value=3)
+        self.mesh_combo = ttk.Combobox(mesh_frame, state='readonly', width=18,
+                                       values=["1 - Coarse","2 - Medium-","3 - Medium","4 - Medium+","5 - Fine"])
+        self.mesh_combo.grid(row=0, column=1, sticky='ew')
+        # Set to default index 2 (value 3)
+        try:
+            self.mesh_combo.current(2)
+        except Exception:
+            pass
+        try:
+            self.mesh_combo.bind('<<ComboboxSelected>>', lambda ev: self._apply_sim_params())
+        except Exception:
+            pass
+        self._control_widgets.append(self.mesh_combo)
+        self._original_states[self.mesh_combo] = 'readonly'
         # Remember last-applied sampling so we can report changes
         try:
             self._prev_theta_step = float(self.var_theta_step.get())
             self._prev_phi_step = float(self.var_phi_step.get())
+            self._prev_mesh_quality = 3
         except Exception:
             self._prev_theta_step = None
             self._prev_phi_step = None
+            self._prev_mesh_quality = None
 
         # View controls
         btn_fit = ttk.Button(parent, text="Fit View", command=self._fit_view)
@@ -719,6 +748,17 @@ class MultiPatchPanel(ttk.Frame):
                 self._prev_phi_step = ph_now
             except Exception:
                 pass
+            # Mesh quality diff
+            try:
+                # Combobox text -> int (first char)
+                sel = self.mesh_combo.get().strip()
+                mq = int(sel.split('-',1)[0].strip()) if sel else 3
+                if self._prev_mesh_quality is None or mq != self._prev_mesh_quality:
+                    label_map = {1:"coarse",2:"medium-",3:"medium",4:"medium+",5:"fine"}
+                    changes.append(f"mesh = {label_map.get(mq, 'medium')} ({mq}/5)")
+                self._prev_mesh_quality = mq
+            except Exception:
+                pass
             self._draw_scene()
             # Show status line
             try:
@@ -730,6 +770,38 @@ class MultiPatchPanel(ttk.Frame):
                 pass
         except Exception as e:
             messagebox.showerror("Error", f"Failed to apply changes: {e}")
+
+    def _apply_sim_params(self):
+        """Apply only simulation parameter changes (sampling, mesh) and show a status message.
+        This is used for Enter-to-apply and dropdown change events."""
+        try:
+            changes = []
+            # theta/phi
+            try:
+                th_now = float(self.var_theta_step.get())
+                ph_now = float(self.var_phi_step.get())
+                if self._prev_theta_step is None or abs(th_now - self._prev_theta_step) > 1e-12:
+                    changes.append(f"theta step = {th_now:g}°")
+                if self._prev_phi_step is None or abs(ph_now - self._prev_phi_step) > 1e-12:
+                    changes.append(f"phi step = {ph_now:g}°")
+                self._prev_theta_step = th_now
+                self._prev_phi_step = ph_now
+            except Exception:
+                pass
+            # mesh
+            try:
+                sel = self.mesh_combo.get().strip()
+                mq = int(sel.split('-',1)[0].strip()) if sel else 3
+                if self._prev_mesh_quality is None or mq != self._prev_mesh_quality:
+                    label_map = {1:"coarse",2:"medium-",3:"medium",4:"medium+",5:"fine"}
+                    changes.append(f"mesh = {label_map.get(mq, 'medium')} ({mq}/5)")
+                self._prev_mesh_quality = mq
+            except Exception:
+                pass
+            if changes:
+                self.status_msg.set("Applied: " + ", ".join(changes))
+        except Exception:
+            pass
 
     # ---- Single-field apply helpers ----
     def _rebuild_params(self, p: PatchInstance, **overrides):

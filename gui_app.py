@@ -1149,8 +1149,8 @@ class PlotFrame(ttk.Frame):
                 ax_3d.tick_params(colors='white'); ax_3d.xaxis.pane.fill = False; ax_3d.yaxis.pane.fill = False; ax_3d.zaxis.pane.fill = False
                 max_range = 1.2
                 ax_3d.set_xlim([-max_range, max_range]); ax_3d.set_ylim([-max_range, max_range]); ax_3d.set_zlim([-1.1, max_range])
-                # Standard orientation: +X left, +Y right, +Z up
-                ax_3d.view_init(elev=25, azim=135)
+                # Default isometric-like orientation (≈45° yaw, slight tilt)
+                ax_3d.view_init(elev=30, azim=45)
                 m = plt.cm.ScalarMappable(cmap=plt.cm.plasma); m.set_array(color_vals)
                 try:
                     m.set_clim(vmin, vmax)
@@ -2555,15 +2555,27 @@ class AntennaSimulatorGUI:
                 try:
                     theta_step = float(getattr(self.plot_frame.multi_panel, 'var_theta_step', None).get())
                     phi_step = float(getattr(self.plot_frame.multi_panel, 'var_phi_step', None).get())
+                    # Mesh quality: parse combobox selection like "3 - Medium"
+                    mq = 3
+                    try:
+                        mq_sel = getattr(self.plot_frame.multi_panel, 'mesh_combo', None)
+                        if mq_sel is not None:
+                            sel_txt = mq_sel.get().strip()
+                            if sel_txt:
+                                mq = int(sel_txt.split('-',1)[0].strip())
+                    except Exception:
+                        mq = 3
                 except Exception:
                     theta_step = self.param_frame.vars['theta_step'].get()
                     phi_step = self.param_frame.vars['phi_step'].get()
+                    mq = 3
                 prepared = prepare_openems_microstrip_multi_3d(
                     patches,
                     dll_dir=dll_path,
                     boundary=self.param_frame.vars['boundary'].get(),
                     theta_step_deg=theta_step,
                     phi_step_deg=phi_step,
+                    mesh_quality=mq,
                     verbose=1,
                 )
             elif is_microstrip:

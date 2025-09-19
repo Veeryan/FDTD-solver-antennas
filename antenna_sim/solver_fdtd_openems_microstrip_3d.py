@@ -25,6 +25,7 @@ def prepare_openems_microstrip_patch_3d(
     boundary: str = "MUR",
     theta_step_deg: float = 2.0,
     phi_step_deg: float = 5.0,
+    mesh_quality: int = 3,
     work_dir: str = "openems_out_microstrip",
     cleanup: bool = True,
     verbose: int = 0,
@@ -87,7 +88,15 @@ def prepare_openems_microstrip_patch_3d(
         mesh = CSX.GetGrid()
         mesh.SetDeltaUnit(unit)
 
-        mesh_res = C0 / (f0 + fc) / unit / 20
+        # Mesh resolution based on points-per-wavelength, controlled by mesh_quality (1..5)
+        try:
+            q = int(mesh_quality)
+        except Exception:
+            q = 3
+        q = max(1, min(5, q))
+        ppw_map = {1: 12.0, 2: 16.0, 3: 20.0, 4: 25.0, 5: 32.0}
+        ppw = ppw_map.get(q, 20.0)
+        mesh_res = C0 / (f0 + fc) / unit / ppw
 
         mesh.AddLine('x', [-SimBox_X/2, SimBox_X/2])
         mesh.AddLine('y', [-SimBox_Y/2, SimBox_Y/2])
