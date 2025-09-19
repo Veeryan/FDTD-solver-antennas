@@ -227,6 +227,87 @@ class MultiPatchPanel(ttk.Frame):
             self._prev_theta_step = None
             self._prev_phi_step = None
             self._prev_mesh_quality = None
+        # Previous NF2FF center and sim box state
+        self._prev_nf_center = 'Origin'
+        self._prev_simbox_mode = 'Auto'
+        self._prev_margin_x = 80.0
+        self._prev_margin_y = 80.0
+        self._prev_margin_z = 160.0
+        self._prev_box_x = 400.0
+        self._prev_box_y = 400.0
+        self._prev_box_z = 160.0
+
+        # NF2FF center control
+        nf_frame = ttk.LabelFrame(parent, text="NF2FF Center")
+        nf_frame.pack(fill='x', padx=10, pady=(0, 10))
+        ttk.Label(nf_frame, text="Center").grid(row=0, column=0, sticky='w')
+        self.var_nf2ff_center = tk.StringVar(value='Origin')
+        self.nf_center_combo = ttk.Combobox(nf_frame, textvariable=self.var_nf2ff_center, state='readonly',
+                                            values=['Origin','Centroid'])
+        self.nf_center_combo.grid(row=0, column=1, sticky='ew')
+        try:
+            self.nf_center_combo.bind('<<ComboboxSelected>>', lambda ev: self._apply_sim_params())
+        except Exception:
+            pass
+        self._control_widgets.append(self.nf_center_combo)
+        self._original_states[self.nf_center_combo] = 'readonly'
+
+        # Simulation Box controls
+        box_frame = ttk.LabelFrame(parent, text="Simulation Box")
+        box_frame.pack(fill='x', padx=10, pady=(0, 10))
+        ttk.Label(box_frame, text="Mode").grid(row=0, column=0, sticky='w')
+        self.var_simbox_mode = tk.StringVar(value='Auto')
+        self.simbox_mode_combo = ttk.Combobox(box_frame, textvariable=self.var_simbox_mode, state='readonly',
+                                              values=['Auto','Manual'])
+        self.simbox_mode_combo.grid(row=0, column=1, sticky='ew')
+        try:
+            self.simbox_mode_combo.bind('<<ComboboxSelected>>', lambda ev: self._apply_sim_params())
+        except Exception:
+            pass
+        self._control_widgets.append(self.simbox_mode_combo)
+        self._original_states[self.simbox_mode_combo] = 'readonly'
+
+        # Auto margins (mm)
+        ttk.Label(box_frame, text="Auto margins (mm): X").grid(row=1, column=0, sticky='w')
+        self.var_margin_x = tk.DoubleVar(value=80.0)
+        e_mx = ttk.Entry(box_frame, textvariable=self.var_margin_x, width=8)
+        e_mx.grid(row=1, column=1, sticky='w')
+        ttk.Label(box_frame, text="Y").grid(row=1, column=2, sticky='w')
+        self.var_margin_y = tk.DoubleVar(value=80.0)
+        e_my = ttk.Entry(box_frame, textvariable=self.var_margin_y, width=8)
+        e_my.grid(row=1, column=3, sticky='w')
+        ttk.Label(box_frame, text="Z").grid(row=1, column=4, sticky='w')
+        self.var_margin_z = tk.DoubleVar(value=160.0)
+        e_mz = ttk.Entry(box_frame, textvariable=self.var_margin_z, width=8)
+        e_mz.grid(row=1, column=5, sticky='w')
+        for w in (e_mx, e_my, e_mz):
+            try:
+                w.bind('<Return>', lambda ev: self._apply_sim_params())
+            except Exception:
+                pass
+            self._control_widgets.append(w)
+            self._original_states[w] = 'normal'
+
+        # Manual box size (mm)
+        ttk.Label(box_frame, text="Manual size (mm): X").grid(row=2, column=0, sticky='w', pady=(4,0))
+        self.var_box_x = tk.DoubleVar(value=400.0)
+        e_bx = ttk.Entry(box_frame, textvariable=self.var_box_x, width=8)
+        e_bx.grid(row=2, column=1, sticky='w', pady=(4,0))
+        ttk.Label(box_frame, text="Y").grid(row=2, column=2, sticky='w', pady=(4,0))
+        self.var_box_y = tk.DoubleVar(value=400.0)
+        e_by = ttk.Entry(box_frame, textvariable=self.var_box_y, width=8)
+        e_by.grid(row=2, column=3, sticky='w', pady=(4,0))
+        ttk.Label(box_frame, text="Z").grid(row=2, column=4, sticky='w', pady=(4,0))
+        self.var_box_z = tk.DoubleVar(value=160.0)
+        e_bz = ttk.Entry(box_frame, textvariable=self.var_box_z, width=8)
+        e_bz.grid(row=2, column=5, sticky='w', pady=(4,0))
+        for w in (e_bx, e_by, e_bz):
+            try:
+                w.bind('<Return>', lambda ev: self._apply_sim_params())
+            except Exception:
+                pass
+            self._control_widgets.append(w)
+            self._original_states[w] = 'normal'
 
         # View controls
         btn_fit = ttk.Button(parent, text="Fit View", command=self._fit_view)
@@ -759,6 +840,32 @@ class MultiPatchPanel(ttk.Frame):
                 self._prev_mesh_quality = mq
             except Exception:
                 pass
+            # NF2FF center diff
+            try:
+                nf_now = self.nf_center_combo.get().strip() or 'Origin'
+                if nf_now != self._prev_nf_center:
+                    changes.append(f"NF2FF center = {nf_now}")
+                self._prev_nf_center = nf_now
+            except Exception:
+                pass
+            # Simulation box diffs
+            try:
+                mode_now = self.simbox_mode_combo.get().strip() or 'Auto'
+                if mode_now != self._prev_simbox_mode:
+                    changes.append(f"SimBox mode = {mode_now}")
+                self._prev_simbox_mode = mode_now
+                # Margins
+                mx, my, mz = float(self.var_margin_x.get()), float(self.var_margin_y.get()), float(self.var_margin_z.get())
+                if abs(mx - self._prev_margin_x) > 1e-9 or abs(my - self._prev_margin_y) > 1e-9 or abs(mz - self._prev_margin_z) > 1e-9:
+                    changes.append(f"Auto margins = ({mx:g},{my:g},{mz:g}) mm")
+                self._prev_margin_x, self._prev_margin_y, self._prev_margin_z = mx, my, mz
+                # Manual sizes
+                bx, by, bz = float(self.var_box_x.get()), float(self.var_box_y.get()), float(self.var_box_z.get())
+                if abs(bx - self._prev_box_x) > 1e-9 or abs(by - self._prev_box_y) > 1e-9 or abs(bz - self._prev_box_z) > 1e-9:
+                    changes.append(f"Manual box = ({bx:g},{by:g},{bz:g}) mm")
+                self._prev_box_x, self._prev_box_y, self._prev_box_z = bx, by, bz
+            except Exception:
+                pass
             self._draw_scene()
             # Show status line
             try:
@@ -796,6 +903,30 @@ class MultiPatchPanel(ttk.Frame):
                     label_map = {1:"coarse",2:"medium-",3:"medium",4:"medium+",5:"fine"}
                     changes.append(f"mesh = {label_map.get(mq, 'medium')} ({mq}/5)")
                 self._prev_mesh_quality = mq
+            except Exception:
+                pass
+            # NF2FF center
+            try:
+                nf_now = self.nf_center_combo.get().strip() or 'Origin'
+                if nf_now != self._prev_nf_center:
+                    changes.append(f"NF2FF center = {nf_now}")
+                self._prev_nf_center = nf_now
+            except Exception:
+                pass
+            # Sim box
+            try:
+                mode_now = self.simbox_mode_combo.get().strip() or 'Auto'
+                if mode_now != self._prev_simbox_mode:
+                    changes.append(f"SimBox mode = {mode_now}")
+                self._prev_simbox_mode = mode_now
+                mx, my, mz = float(self.var_margin_x.get()), float(self.var_margin_y.get()), float(self.var_margin_z.get())
+                if abs(mx - self._prev_margin_x) > 1e-9 or abs(my - self._prev_margin_y) > 1e-9 or abs(mz - self._prev_margin_z) > 1e-9:
+                    changes.append(f"Auto margins = ({mx:g},{my:g},{mz:g}) mm")
+                self._prev_margin_x, self._prev_margin_y, self._prev_margin_z = mx, my, mz
+                bx, by, bz = float(self.var_box_x.get()), float(self.var_box_y.get()), float(self.var_box_z.get())
+                if abs(bx - self._prev_box_x) > 1e-9 or abs(by - self._prev_box_y) > 1e-9 or abs(bz - self._prev_box_z) > 1e-9:
+                    changes.append(f"Manual box = ({bx:g},{by:g},{bz:g}) mm")
+                self._prev_box_x, self._prev_box_y, self._prev_box_z = bx, by, bz
             except Exception:
                 pass
             if changes:

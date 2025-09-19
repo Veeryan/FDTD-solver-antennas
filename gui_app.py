@@ -2576,6 +2576,20 @@ class AntennaSimulatorGUI:
                     theta_step_deg=theta_step,
                     phi_step_deg=phi_step,
                     mesh_quality=mq,
+                    nf_center_mode=(getattr(self.plot_frame.multi_panel, 'nf_center_combo', None).get().lower() if getattr(self.plot_frame.multi_panel, 'nf_center_combo', None) else 'origin'),
+                    simbox_mode=(getattr(self.plot_frame.multi_panel, 'simbox_mode_combo', None).get().lower() if getattr(self.plot_frame.multi_panel, 'simbox_mode_combo', None) else 'auto'),
+                    auto_margin_mm=(
+                        float(getattr(self.plot_frame.multi_panel, 'var_margin_x', None).get()) if getattr(self.plot_frame.multi_panel, 'var_margin_x', None) else 80.0,
+                        float(getattr(self.plot_frame.multi_panel, 'var_margin_y', None).get()) if getattr(self.plot_frame.multi_panel, 'var_margin_y', None) else 80.0,
+                        float(getattr(self.plot_frame.multi_panel, 'var_margin_z', None).get()) if getattr(self.plot_frame.multi_panel, 'var_margin_z', None) else 160.0,
+                    ),
+                    manual_size_mm=(
+                        (
+                            float(getattr(self.plot_frame.multi_panel, 'var_box_x', None).get()),
+                            float(getattr(self.plot_frame.multi_panel, 'var_box_y', None).get()),
+                            float(getattr(self.plot_frame.multi_panel, 'var_box_z', None).get()),
+                        ) if (getattr(self.plot_frame.multi_panel, 'simbox_mode_combo', None) and getattr(self.plot_frame.multi_panel, 'simbox_mode_combo', None).get().lower().startswith('man')) else None
+                    ),
                     verbose=1,
                 )
             elif is_microstrip:

@@ -38,9 +38,26 @@ def _rot_z(deg: float) -> np.ndarray:
     return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]], dtype=float)
 
 
-def _transform_point_local_to_global(p_local_mm: Sequence[float], Rz: np.ndarray, T_mm: np.ndarray) -> list[float]:
+def _rotation_matrix(rx_deg: float, ry_deg: float, rz_deg: float) -> np.ndarray:
+    """Extrinsic rotations about global X, then Y, then Z. Row-vector convention: world = local @ R.T + T.
+    Matches MultiPatchPanel._rotation_matrix for consistency.
+    """
+    rx = math.radians(rx_deg)
+    ry = math.radians(ry_deg)
+    rz = math.radians(rz_deg)
+    cx, sx = math.cos(rx), math.sin(rx)
+    cy, sy = math.cos(ry), math.sin(ry)
+    cz, sz = math.cos(rz), math.sin(rz)
+    Rx = np.array([[1, 0, 0], [0, cx, -sx], [0, sx, cx]], dtype=float)
+    Ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]], dtype=float)
+    Rz = np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]], dtype=float)
+    return Rx @ Ry @ Rz
+
+
+def _transform_point_local_to_global(p_local_mm: Sequence[float], R: np.ndarray, T_mm: np.ndarray) -> list[float]:
     p = np.asarray(p_local_mm, dtype=float)
-    return (Rz @ p + T_mm).tolist()
+    # Row-vector: world = R @ p (column) + T -> equivalently p(row) @ R.T + T
+    return (p @ R.T + T_mm).tolist()
 
 
 def _compute_patch_dims_mm(params: PatchAntennaParams) -> tuple[float, float, float]:
@@ -83,6 +100,10 @@ def prepare_openems_microstrip_multi_3d(
     theta_step_deg: float = 2.0,
     phi_step_deg: float = 5.0,
     mesh_quality: int = 3,
+    nf_center_mode: str = "origin",  # 'origin' | 'centroid'
+    simbox_mode: str = "auto",       # 'auto' | 'manual'
+    auto_margin_mm: tuple[float, float, float] = (80.0, 80.0, 160.0),
+    manual_size_mm: Optional[tuple[float, float, float]] = None,
     feed_line_length_mm: float = 20.0,
     work_dir: str = "openems_out_multi",
     cleanup: bool = True,
@@ -152,11 +173,14 @@ def prepare_openems_microstrip_multi_3d(
 
         x_min, x_max = float(min(all_x)), float(max(all_x))
         y_min, y_max = float(min(all_y)), float(max(all_y))
-        # Air margin around the envelope
-        air_margin = 80.0
-        SimBox_X = (x_max - x_min) + 2 * air_margin
-        SimBox_Y = (y_max - y_min) + 2 * air_margin
-        SimBox_Z = max(160.0, 6 * max_h)
+        # Simulation box sizing
+        if (simbox_mode or "auto").lower().startswith('man') and manual_size_mm is not None:
+            SimBox_X, SimBox_Y, SimBox_Z = manual_size_mm
+        else:
+            mx, my, mz = auto_margin_mm
+            SimBox_X = (x_max - x_min) + 2 * float(mx)
+            SimBox_Y = (y_max - y_min) + 2 * float(my)
+            SimBox_Z = max(float(mz), 6 * max_h)
 
         if verbose:
             print(f"SimBox (mm): X={SimBox_X:.1f} Y={SimBox_Y:.1f} Z={SimBox_Z:.1f}")
@@ -330,10 +354,13 @@ def prepare_openems_microstrip_multi_3d(
             shutil.rmtree(sim_path, ignore_errors=True)
         # Do not pre-create the folder here; FDTD.Run will create it.
 
-        # NF2FF phase center: average of instance centers
-        cx = float(np.mean([p.center_x_m for p in patches])) * 1e3
-        cy = float(np.mean([p.center_y_m for p in patches])) * 1e3
-        cz = float(np.mean([p.center_z_m for p in patches])) * 1e3 + max_h/2000.0
+        # NF2FF phase center
+        if (nf_center_mode or 'origin').lower().startswith('cent'):
+            cx = float(np.mean([p.center_x_m for p in patches])) * 1e3
+            cy = float(np.mean([p.center_y_m for p in patches])) * 1e3
+            cz = float(np.mean([p.center_z_m for p in patches])) * 1e3 + max_h/2000.0
+        else:
+            cx, cy, cz = 0.0, 0.0, max_h/2000.0
 
         return OpenEMSPrepared(
             True,
