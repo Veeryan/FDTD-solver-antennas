@@ -15,6 +15,8 @@ Based on openEMS tutorials, particularly Simple_Patch_Antenna.py
 
 import os
 import shutil
+import time
+import random
 import glob
 import numpy as np
 from typing import Optional, Literal
@@ -336,11 +338,12 @@ def prepare_openems_microstrip_patch(
         # Create NF2FF recording box
         nf2ff = FDTD.CreateNF2FFBox()
         
-        # Setup simulation directory
-        sim_path = os.path.abspath(work_dir)
+        # Setup simulation directory (unique per run to avoid collisions across GUI instances)
+        suffix = time.strftime("%Y%m%d-%H%M%S") + f"-{os.getpid()}-{random.randint(1000,9999)}"
+        sim_path = os.path.abspath(f"{work_dir}_{suffix}")
         if cleanup and os.path.isdir(sim_path):
             shutil.rmtree(sim_path, ignore_errors=True)
-        os.makedirs(sim_path, exist_ok=True)
+        # Do not pre-create; FDTD.Run will create it
         
         # Define angles for far-field calculation (include zenith explicitly to avoid gaps)
         step = max(0.5, float(theta_step_deg))

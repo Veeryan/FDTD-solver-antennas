@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Optional
 import os
+import time
+import random
 import numpy as np
 
 from .models import PatchAntennaParams
@@ -145,11 +147,13 @@ def prepare_openems_microstrip_patch_3d(
         mesh.SmoothMeshLines('all', mesh_res, 1.4)
         nf2ff = FDTD.CreateNF2FFBox()
 
-        sim_path = os.path.abspath(work_dir)
+        # Create a unique simulation path so multiple GUI instances do not collide
+        suffix = time.strftime("%Y%m%d-%H%M%S") + f"-{os.getpid()}-{random.randint(1000,9999)}"
+        sim_path = os.path.abspath(f"{work_dir}_{suffix}")
         if cleanup and os.path.isdir(sim_path):
             import shutil
             shutil.rmtree(sim_path, ignore_errors=True)
-        os.makedirs(sim_path, exist_ok=True)
+        # Do not pre-create; let FDTD.Run create the directory to avoid WinError 183
 
         # Dense 3D sampling (user configurable)
         theta = np.arange(0.0, 181.0, max(0.5, float(theta_step_deg)))

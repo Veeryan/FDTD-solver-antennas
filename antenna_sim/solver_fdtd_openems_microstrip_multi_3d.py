@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import List, Optional, Sequence
 import os
+import time
+import random
 import math
 import numpy as np
 
@@ -311,11 +313,13 @@ def prepare_openems_microstrip_multi_3d(
         mesh.SmoothMeshLines('all', mesh_res, 1.4)
         nf2ff = FDTD.CreateNF2FFBox()
 
-        sim_path = os.path.abspath(work_dir)
+        # Use a unique path per invocation to avoid collisions across GUI instances
+        suffix = time.strftime("%Y%m%d-%H%M%S") + f"-{os.getpid()}-{random.randint(1000,9999)}"
+        sim_path = os.path.abspath(f"{work_dir}_{suffix}")
         if cleanup and os.path.isdir(sim_path):
             import shutil
             shutil.rmtree(sim_path, ignore_errors=True)
-        os.makedirs(sim_path, exist_ok=True)
+        # Do not pre-create the folder here; FDTD.Run will create it.
 
         # NF2FF phase center: average of instance centers
         cx = float(np.mean([p.center_x_m for p in patches])) * 1e3

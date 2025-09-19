@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import shutil
+import time
+import random
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
@@ -217,11 +219,12 @@ def prepare_openems_patch_fixed(
         # Add the nf2ff recording box - EXACTLY like tutorial
         nf2ff = FDTD.CreateNF2FFBox()
         
-        # Setup simulation path
-        sim_path = os.path.abspath(work_dir)
+        # Setup simulation path (unique per invocation) to allow multiple GUIs simultaneously
+        suffix = time.strftime("%Y%m%d-%H%M%S") + f"-{os.getpid()}-{random.randint(1000,9999)}"
+        sim_path = os.path.abspath(f"{work_dir}_{suffix}")
         if cleanup and os.path.isdir(sim_path):
             shutil.rmtree(sim_path, ignore_errors=True)
-        os.makedirs(sim_path, exist_ok=True)
+        # Do not pre-create; FDTD.Run will create it
         
         # Define theta/phi arrays for NF2FF calculation
         theta = np.arange(0.0, 180.0, 2.0)  # degrees, 0° (zenith) to 180° (nadir) for proper spherical coordinates

@@ -123,10 +123,14 @@ class ParameterFrame(ttk.Frame):
         # Header (match Multi Patch Controls: bold plain ttk)
         header = ttk.Label(self, text="📐 Single Patch Controls", font=("Segoe UI", 12, "bold"))
         header.pack(fill='x', padx=10, pady=(10, 5))
+        # Small view-only badge (only shown while simulation runs)
+        self.view_only_label = ttk.Label(self, text="🔒 View-only during run", style='Modern.TLabel')
         
         # Parameters frame
         params_frame = ttk.Frame(self)
         params_frame.pack(fill='both', expand=True, padx=10, pady=5)
+        # Keep a reference so we can place the badge just above these controls
+        self._params_container = params_frame
         
         # Create parameter inputs
         self.vars = {}
@@ -265,6 +269,17 @@ class ParameterFrame(ttk.Frame):
 
     def set_params_state(self, state: str):
         try:
+            # Toggle the small view-only badge immediately
+            try:
+                if state == 'normal':
+                    self.view_only_label.pack_forget()
+                else:
+                    # Place badge above the parameter grid, under the header
+                    self.view_only_label.pack_forget()
+                    self.view_only_label.pack(before=self._params_container, fill='x', padx=10, pady=(0, 4))
+            except Exception:
+                pass
+
             # Iterate all descendants and set sensible states
             for widget in self.winfo_children():
                 for sub in widget.winfo_children():
@@ -992,7 +1007,7 @@ class PlotFrame(ttk.Frame):
             print(f"Error updating 2D patterns: {e}")
             import traceback; traceback.print_exc()
 
-    def update_3d_pattern(self, theta, phi, intensity, params):
+    def update_3d_pattern(self, theta, phi, intensity, params, norm_mode: str = 'dBi'):
         """Update 3D radiation pattern plot - EXACT copy of Streamlit version"""
         try:
             self._hide_multi_placeholder('3d')
@@ -1002,28 +1017,43 @@ class PlotFrame(ttk.Frame):
             # If we have a full theta x phi grid, render it directly
             if (phi is not None) and (intensity.ndim == 2) and (intensity.shape == (len(theta), len(phi))):
                 TH, PH = np.meshgrid(theta, phi, indexing='ij')
-                patt = np.asarray(intensity, dtype=float)
-                # Normalize to max = 0 dB and convert to linear radius
-                patt = patt - np.nanmax(patt)
-                R = np.maximum(0.01, 10**(patt/20.0))
+                patt_abs = np.asarray(intensity, dtype=float)
+                # Geometry radius uses normalized relative dB (0 dB at max) for a nice shape
+                patt_rel = patt_abs - np.nanmax(patt_abs)
+                R = np.maximum(0.01, 10**(patt_rel/20.0))
                 X = R * np.sin(TH) * np.cos(PH)
                 Y = R * np.sin(TH) * np.sin(PH)
                 Z = R * np.cos(TH)
                 fig_3d = Figure(figsize=(8, 6), facecolor='#2b2b2b')
                 ax_3d = fig_3d.add_subplot(111, projection='3d'); ax_3d.set_facecolor('#2b2b2b')
-                # Color by dB, normalized between min and 0 dB
-                db = patt
-                db_min = float(np.nanpercentile(db, 10))
-                db = np.clip(db, db_min, 0.0)
-                norm = (db - db_min) / max(1e-9, (0.0 - db_min))
+                # Color by absolute dBi or normalized (dB rel. max) depending on UI
+                if isinstance(norm_mode, str) and norm_mode.lower().startswith('norm'):
+                    color_vals = patt_rel  # dB rel. max, max at 0 dB
+                    vmax = 0.0
+                    vmin = float(np.nanpercentile(color_vals, 10))
+                    C = np.clip(color_vals, vmin, vmax)
+                    cbar_label = 'Gain (dB rel. max)'
+                else:
+                    color_vals = patt_abs
+                    vmin = float(np.nanpercentile(color_vals, 10))
+                    vmax = float(np.nanmax(color_vals))
+                    C = np.clip(color_vals, vmin, vmax)
+                    cbar_label = 'Gain (dBi)'
+                norm = (C - vmin) / max(1e-9, (vmax - vmin))
                 surf = ax_3d.plot_surface(X, Y, Z, facecolors=plt.cm.plasma(norm), linewidth=0, antialiased=True, alpha=0.95)
                 ax_3d.tick_params(colors='white'); ax_3d.xaxis.pane.fill = False; ax_3d.yaxis.pane.fill = False; ax_3d.zaxis.pane.fill = False
                 max_range = 1.2
                 ax_3d.set_xlim([-max_range, max_range]); ax_3d.set_ylim([-max_range, max_range]); ax_3d.set_zlim([-1.1, max_range])
-                ax_3d.view_init(elev=20, azim=-60)
-                m = plt.cm.ScalarMappable(cmap=plt.cm.plasma); m.set_array(db)
+                # Standard orientation: +X left, +Y right, +Z up
+                ax_3d.view_init(elev=25, azim=135)
+                m = plt.cm.ScalarMappable(cmap=plt.cm.plasma)
+                m.set_array(color_vals)
+                try:
+                    m.set_clim(vmin, vmax)
+                except Exception:
+                    pass
                 cbar = fig_3d.colorbar(m, ax=ax_3d, shrink=0.85, aspect=24)
-                cbar.set_label('Gain (dB rel. max)', fontsize=12, color='white'); cbar.ax.tick_params(colors='white')
+                cbar.set_label(cbar_label, fontsize=12, color='white'); cbar.ax.tick_params(colors='white')
 
                 # Origin triad axes (+X,+Y,+Z)
                 L = 0.9 * max_range
@@ -1034,9 +1064,16 @@ class PlotFrame(ttk.Frame):
                 ax_3d.text(0, L+0.05, 0, '+Y', color='green', weight='bold')
                 ax_3d.text(0, 0, L+0.05, '+Z', color='blue', weight='bold')
 
-                # Info box
+                # Remove axis box/grid but keep the plotted data
                 try:
-                    gmax = float(np.nanmax(patt)); gmin = float(np.nanmin(patt))
+                    ax_3d.grid(False)
+                    ax_3d.set_axis_off()
+                except Exception:
+                    pass
+
+                # Info box (use absolute dBi if available)
+                try:
+                    gmax = float(np.nanmax(patt_abs)); gmin = float(np.nanmin(patt_abs))
                     info = f"Frequency: {params.frequency_hz/1e9:.2f} GHz\nMax Gain: {gmax:.1f} dBi\nMin Gain: {gmin:.1f} dBi"
                     ax_3d.text2D(0.02, 0.98, info, transform=ax_3d.transAxes, va='top',
                                   bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
@@ -1089,18 +1126,38 @@ class PlotFrame(ttk.Frame):
                 Z = pattern_linear * np.cos(TH)
                 fig_3d = Figure(figsize=(8, 6), facecolor='#2b2b2b')
                 ax_3d = fig_3d.add_subplot(111, projection='3d'); ax_3d.set_facecolor('#2b2b2b')
+                # Color by absolute dBi or normalized depending on UI
+                pattern_rel = pattern_3d - np.max(pattern_3d)
+                if isinstance(norm_mode, str) and norm_mode.lower().startswith('norm'):
+                    color_vals = pattern_rel
+                    vmax = 0.0
+                    vmin = float(np.nanpercentile(color_vals, 10))
+                    C = np.clip(color_vals, vmin, vmax)
+                    cbar_label = 'Gain (dB rel. max)'
+                else:
+                    color_vals = pattern_3d
+                    vmin = float(np.nanpercentile(color_vals, 10))
+                    vmax = float(np.nanmax(color_vals))
+                    C = np.clip(color_vals, vmin, vmax)
+                    cbar_label = 'Gain (dBi)'
+                norm = (C - vmin) / max(1e-9, (vmax - vmin))
                 surf = ax_3d.plot_surface(
                     X, Y, Z,
-                    facecolors=plt.cm.jet((pattern_3d - np.min(pattern_3d)) / (np.max(pattern_3d) - np.min(pattern_3d))),
+                    facecolors=plt.cm.plasma(norm),
                     linewidth=0, antialiased=True, alpha=0.8,
                 )
                 ax_3d.tick_params(colors='white'); ax_3d.xaxis.pane.fill = False; ax_3d.yaxis.pane.fill = False; ax_3d.zaxis.pane.fill = False
                 max_range = 1.2
                 ax_3d.set_xlim([-max_range, max_range]); ax_3d.set_ylim([-max_range, max_range]); ax_3d.set_zlim([-1.1, max_range])
-                ax_3d.view_init(elev=20, azim=-60)
-                m = plt.cm.ScalarMappable(cmap=plt.cm.plasma); m.set_array(pattern_3d)
+                # Standard orientation: +X left, +Y right, +Z up
+                ax_3d.view_init(elev=25, azim=135)
+                m = plt.cm.ScalarMappable(cmap=plt.cm.plasma); m.set_array(color_vals)
+                try:
+                    m.set_clim(vmin, vmax)
+                except Exception:
+                    pass
                 cbar = fig_3d.colorbar(m, ax=ax_3d, shrink=0.85, aspect=24)
-                cbar.set_label('Gain (dBi)', fontsize=12, color='white'); cbar.ax.tick_params(colors='white')
+                cbar.set_label(cbar_label, fontsize=12, color='white'); cbar.ax.tick_params(colors='white')
 
                 # Origin triad axes (+X,+Y,+Z)
                 L = 0.9 * max_range
@@ -1110,6 +1167,13 @@ class PlotFrame(ttk.Frame):
                 ax_3d.text(L+0.05, 0, 0, '+X', color='red', weight='bold')
                 ax_3d.text(0, L+0.05, 0, '+Y', color='green', weight='bold')
                 ax_3d.text(0, 0, L+0.05, '+Z', color='blue', weight='bold')
+
+                # Remove axis box/grid but keep the plotted data
+                try:
+                    ax_3d.grid(False)
+                    ax_3d.set_axis_off()
+                except Exception:
+                    pass
 
                 # Info box
                 try:
@@ -2213,6 +2277,11 @@ class AntennaSimulatorGUI:
         self.current_params = None
         self.simulation_thread = None
         self._sidebar_overlay = None
+        # cache last simulation results for quick re-render of 3D coloring
+        self._last_theta = None
+        self._last_phi = None
+        self._last_intensity = None
+        self._last_params = None
         
         # Set up proper cleanup when window is closed
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -2259,6 +2328,11 @@ class AntennaSimulatorGUI:
         # Single Patch Controls under the FDTD controls
         self.param_frame = ParameterFrame(left_panel, ModernStyle)
         self.param_frame.pack(fill='x', pady=(0, 5))
+        # When 3D scale changes, re-render the 3D plot using cached data
+        try:
+            self.param_frame.vars['norm_mode'].trace_add('write', lambda *args: self._on_norm_mode_change())
+        except Exception:
+            pass
         
         # Right panel (plots and log)
         right_panel = ttk.Frame(main_frame, style='Modern.TFrame')
@@ -2413,8 +2487,6 @@ class AntennaSimulatorGUI:
             self.root.after(0, lambda: self.control_frame.set_status("Probing openEMS..."))
             # Prevent switching between Single/Multi while running
             self.root.after(0, lambda: self.plot_frame.set_mode_switch_enabled(False))
-            # Dim sidebar but keep params visible
-            self.root.after(0, lambda: self._show_sidebar_overlay("Locked while simulation is running..."))
             print("Starting FDTD simulation...")
             
             # Get DLL path and solver type
@@ -2436,9 +2508,9 @@ class AntennaSimulatorGUI:
                 raise Exception(f"openEMS probe failed: {probe_result.message}")
             
             print("openEMS probe successful")
-            # Disable parameter editing while simulation is running
+            # Disable parameter editing while simulation is running (schedule on UI thread)
             try:
-                self.param_frame.set_params_state('disabled')
+                self.root.after(0, lambda: self.param_frame.set_params_state('disabled'))
             except Exception:
                 pass
             # In Multi mode, lock the Multi Patch Controls panel as well
@@ -2678,7 +2750,7 @@ class AntennaSimulatorGUI:
             
             # If we have a full 3D grid (theta x phi), show 3D pattern directly
             if intensity.ndim == 2 and phi is not None and theta is not None and intensity.shape == (len(theta), len(phi)):
-                self.plot_frame.update_3d_pattern(theta, phi, intensity, self.current_params)
+                self.plot_frame.update_3d_pattern(theta, phi, intensity, self.current_params, norm_mode=self.param_frame.vars['norm_mode'].get())
                 # Also synthesize E/H plane cuts for 2D tab: phi=0 and phi=90
                 try:
                     phi_vals = np.asarray(phi)
@@ -2691,13 +2763,28 @@ class AntennaSimulatorGUI:
             else:
                 # Fall back to existing behavior: update 2D cuts first, then 3D interpolation
                 self.plot_frame.update_2d_patterns(theta, intensity)
-                self.plot_frame.update_3d_pattern(theta, phi, intensity, self.current_params)
+                self.plot_frame.update_3d_pattern(theta, phi, intensity, self.current_params, norm_mode=self.param_frame.vars['norm_mode'].get())
             
             # Switch to results tab
             self.plot_frame.notebook.select(1)  # Switch to 2D patterns tab
             
+            # cache last
+            self._last_theta = theta
+            self._last_phi = phi
+            self._last_intensity = intensity
+            self._last_params = self.current_params
+            
         except Exception as e:
             print(f"Error updating simulation results: {e}")
+
+    def _on_norm_mode_change(self):
+        try:
+            if self._last_theta is None or self._last_intensity is None:
+                return
+            mode = self.param_frame.vars['norm_mode'].get()
+            self.plot_frame.update_3d_pattern(self._last_theta, self._last_phi, self._last_intensity, self._last_params or self.current_params, norm_mode=mode)
+        except Exception as e:
+            print(f"norm_mode change error: {e}")
     
     def on_closing(self):
         """Handle application closure - ensures complete termination"""

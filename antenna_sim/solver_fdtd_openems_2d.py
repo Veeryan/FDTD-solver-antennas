@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import time
+import random
 from dataclasses import dataclass
 from typing import Optional
 
@@ -148,11 +150,13 @@ def prepare_openems_patch_2d(
         mesh.SmoothMeshLines('all', res, 1.4)
         nf = FDTD.CreateNF2FFBox()
 
-        sim_path = os.path.abspath(work_dir)
+        # Unique path per invocation
+        suffix = time.strftime("%Y%m%d-%H%M%S") + f"-{os.getpid()}-{random.randint(1000,9999)}"
+        sim_path = os.path.abspath(f"{work_dir}_{suffix}")
         if cleanup and os.path.isdir(sim_path):
             import shutil
             shutil.rmtree(sim_path, ignore_errors=True)
-        os.makedirs(sim_path, exist_ok=True)
+        # Let FDTD.Run create the directory
 
         theta = np.linspace(0, np.pi, 121)
         phi = np.array([0.0, np.pi/2, np.pi, 3*np.pi/2])  # cuts only for quasi-2D
