@@ -1044,8 +1044,8 @@ class PlotFrame(ttk.Frame):
                 ax_3d.tick_params(colors='white'); ax_3d.xaxis.pane.fill = False; ax_3d.yaxis.pane.fill = False; ax_3d.zaxis.pane.fill = False
                 max_range = 1.2
                 ax_3d.set_xlim([-max_range, max_range]); ax_3d.set_ylim([-max_range, max_range]); ax_3d.set_zlim([-1.1, max_range])
-                # Standard orientation: +X left, +Y right, +Z up
-                ax_3d.view_init(elev=25, azim=135)
+                # Default isometric-like orientation (≈45° yaw, slight tilt)
+                ax_3d.view_init(elev=30, azim=45)
                 m = plt.cm.ScalarMappable(cmap=plt.cm.plasma)
                 m.set_array(color_vals)
                 try:

@@ -191,6 +191,13 @@ class MultiPatchPanel(ttk.Frame):
         self._original_states[e_th] = 'normal'
         self._original_states[e_ph] = 'normal'
         ttk.Label(ff, text="Tip: smaller steps increase simulation time").grid(row=2, column=0, columnspan=2, sticky='w', pady=(4,0))
+        # Remember last-applied sampling so we can report changes
+        try:
+            self._prev_theta_step = float(self.var_theta_step.get())
+            self._prev_phi_step = float(self.var_phi_step.get())
+        except Exception:
+            self._prev_theta_step = None
+            self._prev_phi_step = None
 
         # View controls
         btn_fit = ttk.Button(parent, text="Fit View", command=self._fit_view)
@@ -202,6 +209,13 @@ class MultiPatchPanel(ttk.Frame):
         btn_remove = ttk.Button(parent, text="Remove Selected", command=self._on_remove_selected)
         btn_remove.pack(fill='x', padx=10, pady=(0, 6))
         self._control_widgets.extend([btn_apply, btn_remove])
+        # Status line for user feedback after applying changes
+        try:
+            self.status_msg = tk.StringVar(value="")
+            self.status_label = ttk.Label(parent, textvariable=self.status_msg)
+            self.status_label.pack(fill='x', padx=10, pady=(0, 6))
+        except Exception:
+            pass
         ttk.Label(parent, text="Tip: Rotate with mouse, scroll to zoom.").pack(fill='x', padx=10, pady=(8, 10))
 
     # ---- Enable/disable controls with overlay ----
@@ -647,8 +661,16 @@ class MultiPatchPanel(ttk.Frame):
         if self._current_index is None:
             return
         try:
+            # Track what changes are being applied
+            changes = []
             metal_enum = Metal(self.var_metal.get())
             p = self.patches[self._current_index]
+            # Old values (for diff)
+            old = dict(cx=p.center_x_m, cy=p.center_y_m, cz=p.center_z_m,
+                       rx=p.rot_x_deg, ry=p.rot_y_deg, rz=p.rot_z_deg,
+                       freq=p.params.frequency_hz/1e9, eps=p.params.eps_r,
+                       h=p.params.h_m*1e3, loss=p.params.loss_tangent,
+                       metal=str(self.var_metal.get()))
             p.center_x_m = float(self.var_cx.get())
             p.center_y_m = float(self.var_cy.get())
             p.center_z_m = float(self.var_cz.get())
@@ -664,7 +686,48 @@ class MultiPatchPanel(ttk.Frame):
                 patch_length_m=None,
                 patch_width_m=None,
             )
+            # Compare and collect patch diffs (only if user cares)
+            new = dict(cx=p.center_x_m, cy=p.center_y_m, cz=p.center_z_m,
+                       rx=p.rot_x_deg, ry=p.rot_y_deg, rz=p.rot_z_deg,
+                       freq=p.params.frequency_hz/1e9, eps=p.params.eps_r,
+                       h=p.params.h_m*1e3, loss=p.params.loss_tangent,
+                       metal=str(self.var_metal.get()))
+            key_labels = {
+                'cx': 'Cx (m)', 'cy': 'Cy (m)', 'cz': 'Cz (m)',
+                'rx': 'Rx (°)', 'ry': 'Ry (°)', 'rz': 'Rz (°)',
+                'freq': 'Frequency (GHz)', 'eps': 'εr', 'h': 'h (mm)', 'loss': 'loss tan', 'metal': 'metal'
+            }
+            for k in new:
+                try:
+                    if abs(float(new[k]) - float(old[k])) > 1e-12:
+                        if isinstance(new[k], float):
+                            changes.append(f"{key_labels[k]} = {new[k]:.4g}")
+                        else:
+                            changes.append(f"{key_labels[k]} = {new[k]}")
+                except Exception:
+                    if new[k] != old[k]:
+                        changes.append(f"{key_labels[k]} = {new[k]}")
+            # Theta/Phi sampling diffs
+            try:
+                th_now = float(self.var_theta_step.get())
+                ph_now = float(self.var_phi_step.get())
+                if self._prev_theta_step is None or abs(th_now - self._prev_theta_step) > 1e-12:
+                    changes.append(f"theta step = {th_now:g}°")
+                if self._prev_phi_step is None or abs(ph_now - self._prev_phi_step) > 1e-12:
+                    changes.append(f"phi step = {ph_now:g}°")
+                self._prev_theta_step = th_now
+                self._prev_phi_step = ph_now
+            except Exception:
+                pass
             self._draw_scene()
+            # Show status line
+            try:
+                if changes:
+                    self.status_msg.set("Applied: " + ", ".join(changes))
+                else:
+                    self.status_msg.set("No changes detected.")
+            except Exception:
+                pass
         except Exception as e:
             messagebox.showerror("Error", f"Failed to apply changes: {e}")
 
