@@ -344,6 +344,31 @@ class ControlFrame(ttk.Frame):
         # Lock hint (shown during simulation)
         self.lock_hint = ttk.Label(self, text="Locked while simulation is running...", style='Modern.TLabel', anchor='center')
         # Will pack/unpack in set_simulation_running
+
+        # Separate Port Diagnostics panel (stays visible while controls are locked)
+        try:
+            self.port_frame = ttk.LabelFrame(self, text="Port Diagnostics")
+            self.port_frame.pack(fill='x', padx=10, pady=(8, 10))
+            try:
+                # Keep a modest height so the sidebar size stays similar
+                self.port_frame.configure(height=120)
+                self.port_frame.pack_propagate(False)
+            except Exception:
+                pass
+            inner = ttk.Frame(self.port_frame)
+            inner.pack(fill='x', expand=True)
+            self.port_text = tk.Text(inner, height=6, width=1, bg="#14181f", fg="#d8dee9",
+                                     font=('Consolas', 9), wrap='word')
+            try:
+                self.port_text.configure(insertbackground='white')
+            except Exception:
+                pass
+            vsb = ttk.Scrollbar(inner, orient='vertical', command=self.port_text.yview)
+            self.port_text.configure(yscrollcommand=vsb.set)
+            self.port_text.pack(side='left', fill='x', expand=True)
+            vsb.pack(side='right', fill='y')
+        except Exception:
+            pass
     
     def set_status(self, status, color='white'):
         """Update status text"""
@@ -372,6 +397,22 @@ class ControlFrame(ttk.Frame):
                 self.lock_hint.pack_forget()
             except Exception:
                 pass
+
+    # ---- Port diagnostics helpers ----
+    def clear_port_log(self):
+        try:
+            if hasattr(self, 'port_text') and self.port_text is not None:
+                self.port_text.delete('1.0', 'end')
+        except Exception:
+            pass
+
+    def append_port_log(self, text: str):
+        try:
+            if hasattr(self, 'port_text') and self.port_text is not None:
+                self.port_text.insert('end', str(text) + '\n')
+                self.port_text.see('end')
+        except Exception:
+            pass
 
 
 class LogFrame(ttk.Frame):
@@ -491,11 +532,22 @@ class PlotFrame(ttk.Frame):
         # Notebook for tabs
         self.notebook = ttk.Notebook(self)
         self.notebook.pack(fill='both', expand=True, padx=10, pady=5)
-        
-        # Geometry tab
+
+        # Primary Geometry tab (PyVista)
+        self.multi_pv_tab = ttk.Frame(self.notebook, style='Modern.TFrame')
+        self.notebook.add(self.multi_pv_tab, text="Geometry")
+        self._pv_placeholder = ttk.Label(
+            self.multi_pv_tab,
+            text="Switch to Multi Antenna mode to enable 3D Geometry view\n(install 'pyvista' if missing)",
+            style='Modern.TLabel'
+        )
+        self._pv_placeholder.pack(expand=True)
+        self._multi_pv_added = True
+
+        # Geometry Legacy tab (Matplotlib)
         self.geometry_frame = ttk.Frame(self.notebook, style='Modern.TFrame')
-        self.notebook.add(self.geometry_frame, text="Geometry")
-        
+        self.notebook.add(self.geometry_frame, text="Geometry Legacy")
+
         # 2D Patterns tab
         self.pattern_2d_frame = ttk.Frame(self.notebook, style='Modern.TFrame')
         self.notebook.add(self.pattern_2d_frame, text="2D Patterns")
@@ -503,21 +555,10 @@ class PlotFrame(ttk.Frame):
         # 3D Pattern tab
         self.pattern_3d_frame = ttk.Frame(self.notebook, style='Modern.TFrame')
         self.notebook.add(self.pattern_3d_frame, text="3D Pattern")
-
-        # Multi Antenna PyVista (high-fidelity) tab
-        self.multi_pv_tab = ttk.Frame(self.notebook, style='Modern.TFrame')
-        self.notebook.add(self.multi_pv_tab, text="Multi Antenna PyVista")
-        self._pv_placeholder = ttk.Label(self.multi_pv_tab,
-                                          text="Switch to Multi Antenna mode to enable 3D viewer\n(install 'pyvista' if missing)",
-                                          style='Modern.TLabel')
-        self._pv_placeholder.pack(expand=True)
-        # Remove from notebook in Single mode; re-add when switching to Multi
-        self._multi_pv_added = True
-        try:
-            self.notebook.forget(self.multi_pv_tab)
-            self._multi_pv_added = False
-        except Exception:
-            pass
+        # PyVista tab is now always present; placeholder shows in Single mode
+        # Track visibility state of tabs so we can show/hide per mode
+        self._legacy_tab_visible = True
+        self._pv_tab_visible = True
 
         # Add small mode banners at the top of each tab
         self._create_banners()
@@ -556,6 +597,14 @@ class PlotFrame(ttk.Frame):
         self.pattern_3d_canvas = None
         self._update_mode_buttons()
         self._update_mode_banners()
+        # Default mode is 'single' -> hide PyVista 'Geometry' tab
+        try:
+            if self.mode == 'single':
+                # ensure the legacy tab is visible and PyVista hidden
+                self._show_legacy_geometry_tab()
+                self._hide_pv_geometry_tab()
+        except Exception:
+            pass
         
     
     # ---- Mode management ----
@@ -606,31 +655,77 @@ class PlotFrame(ttk.Frame):
         except Exception:
             pass
 
+    # ---- Tab show/hide helpers ----
+    def _hide_legacy_geometry_tab(self):
+        """Hide the Matplotlib 'Geometry Legacy' tab from the notebook if present."""
+        try:
+            if self._legacy_tab_visible:
+                self.notebook.forget(self.geometry_frame)
+                self._legacy_tab_visible = False
+        except Exception:
+            self._legacy_tab_visible = False
+
+    def _show_legacy_geometry_tab(self):
+        """Show the Matplotlib 'Geometry Legacy' tab in the notebook if hidden."""
+        try:
+            if not self._legacy_tab_visible:
+                # Insert after the PyVista 'Geometry' tab (index 0)
+                try:
+                    self.notebook.insert(1, self.geometry_frame, text="Geometry Legacy")
+                except Exception:
+                    self.notebook.add(self.geometry_frame, text="Geometry Legacy")
+                self._legacy_tab_visible = True
+        except Exception:
+            pass
+
+    def _hide_pv_geometry_tab(self):
+        """Hide the PyVista 'Geometry' tab from the notebook if present (Single mode)."""
+        try:
+            if self._pv_tab_visible:
+                self.notebook.forget(self.multi_pv_tab)
+                self._pv_tab_visible = False
+        except Exception:
+            self._pv_tab_visible = False
+
+    def _show_pv_geometry_tab(self):
+        """Show the PyVista 'Geometry' tab in the notebook if hidden (Multi mode)."""
+        try:
+            if not self._pv_tab_visible:
+                # Insert at index 0 so it is the primary Geometry tab
+                try:
+                    self.notebook.insert(0, self.multi_pv_tab, text="Geometry")
+                except Exception:
+                    self.notebook.add(self.multi_pv_tab, text="Geometry")
+                self._pv_tab_visible = True
+        except Exception:
+            pass
+
     def set_mode_single(self):
         if self.mode == 'single':
             return
-        # remove multi panel if present
+        # remove multi panel if present (we keep the object only as needed later)
         if self.multi_panel is not None:
             try:
                 self.multi_panel.destroy()
             except Exception:
                 pass
             self.multi_panel = None
-        # teardown PyVista tab content
+        # teardown PyVista tab content and hide PV tab
         try:
             self._clear_pv_tab()
         except Exception:
             pass
+        self._hide_pv_geometry_tab()
+        # show legacy geometry tab for Single mode and select it
+        self._show_legacy_geometry_tab()
+        try:
+            self.notebook.select(self.geometry_frame)
+        except Exception:
+            pass
+        # update state and UI
         self.mode = 'single'
         self._update_mode_buttons()
         self._update_mode_banners()
-        # Ensure the Multi Antenna PyVista tab is removed in single mode
-        try:
-            if getattr(self, '_multi_pv_added', False):
-                self.notebook.forget(self.multi_pv_tab)
-                self._multi_pv_added = False
-        except Exception:
-            pass
         # remove multi placeholders on pattern tabs
         self._hide_multi_placeholder('2d')
         self._hide_multi_placeholder('3d')
@@ -652,25 +747,17 @@ class PlotFrame(ttk.Frame):
         self.geometry_canvas = None
         self._geom_canvas = None
         self._geom_ax = None
-        # create embedded panel
+        # create MultiPatchPanel for controls/state (do not pack into Geometry tab)
         try:
             from antenna_sim.multi_patch_designer import MultiPatchPanel
-            self.multi_panel = MultiPatchPanel(self.geometry_frame)
-            # Hide the in-panel right controls; keep only the figure on the Geometry tab
+            self.multi_panel = MultiPatchPanel(self)
+            # Do not pack the panel; the main app will embed its right-side controls in the sidebar
             try:
                 self.multi_panel.right.grid_remove()
             except Exception:
                 pass
-            self.multi_panel.pack(fill='both', expand=True)
             # Hook PyVista tab to mirror multi-panel changes
             self._init_pv_tab()
-            # Add the Multi Antenna PyVista tab back in multi mode
-            try:
-                if not getattr(self, '_multi_pv_added', False):
-                    self.notebook.add(self.multi_pv_tab, text="Multi Antenna PyVista")
-                    self._multi_pv_added = True
-            except Exception:
-                pass
             # When main controls change, update PyVista and PV controls list
             def _on_multi_changed(patches):
                 # Update PyVista view
@@ -699,9 +786,17 @@ class PlotFrame(ttk.Frame):
             except Exception:
                 pass
             return
+        # update state and UI
         self.mode = 'multi'
         self._update_mode_buttons()
         self._update_mode_banners()
+        # Hide Legacy, show PyVista Geometry tab and select it
+        self._hide_legacy_geometry_tab()
+        self._show_pv_geometry_tab()
+        try:
+            self.notebook.select(self.multi_pv_tab)
+        except Exception:
+            pass
         # show placeholders for patterns while multi-solver isn't wired
         self._show_multi_placeholder('2d')
         self._show_multi_placeholder('3d')
@@ -1271,8 +1366,8 @@ class PyVistaMultiAntennaView(ttk.Frame):
             self.host.pack(fill='both', expand=True)
             self.update_idletasks()
 
-            # Default to embedded mode inside the Tk tab.
-            # You can force external window by setting PV_EMBED=0 before launch.
+            # Default to embedded mode inside the Tk tab (previous behavior).
+            # You can force external window by setting environment variable PV_EMBED=0 before launch.
             use_embedded = True
             try:
                 use_embedded = os.environ.get('PV_EMBED', '1') == '1'
@@ -2485,6 +2580,8 @@ class AntennaSimulatorGUI:
             # Update UI
             self.root.after(0, lambda: self.control_frame.set_simulation_running(True))
             self.root.after(0, lambda: self.control_frame.set_status("Probing openEMS..."))
+            # Show sidebar overlay to lock the whole left panel
+            self.root.after(0, lambda: self._show_sidebar_overlay())
             # Prevent switching between Single/Multi while running
             self.root.after(0, lambda: self.plot_frame.set_mode_switch_enabled(False))
             print("Starting FDTD simulation...")
@@ -2569,6 +2666,23 @@ class AntennaSimulatorGUI:
                     theta_step = self.param_frame.vars['theta_step'].get()
                     phi_step = self.param_frame.vars['phi_step'].get()
                     mq = 3
+                # Clear the bottom Port Diagnostics panel before preparing a new model
+                try:
+                    if self.control_frame is not None:
+                        self.root.after(0, self.control_frame.clear_port_log)
+                except Exception:
+                    pass
+                # Define a log callback that appends to the bottom Port Diagnostics panel
+                def _port_log_cb(msg: str):
+                    try:
+                        if self.control_frame is not None:
+                            self.root.after(0, lambda m=str(msg): self.control_frame.append_port_log(m))
+                    except Exception:
+                        try:
+                            print(str(msg))
+                        except Exception:
+                            pass
+
                 prepared = prepare_openems_microstrip_multi_3d(
                     patches,
                     dll_dir=dll_path,
@@ -2590,7 +2704,9 @@ class AntennaSimulatorGUI:
                             float(getattr(self.plot_frame.multi_panel, 'var_box_z', None).get()),
                         ) if (getattr(self.plot_frame.multi_panel, 'simbox_mode_combo', None) and getattr(self.plot_frame.multi_panel, 'simbox_mode_combo', None).get().lower().startswith('man')) else None
                     ),
+                    port_mode='lumped',  # Restore stable behavior: Lumped ports for all elements
                     verbose=1,
+                    log_cb=_port_log_cb,
                 )
             elif is_microstrip:
                 from antenna_sim.solver_fdtd_openems_microstrip import FeedDirection
@@ -2792,7 +2908,11 @@ class AntennaSimulatorGUI:
                 self.plot_frame.update_3d_pattern(theta, phi, intensity, self.current_params, norm_mode=self.param_frame.vars['norm_mode'].get())
             
             # Switch to results tab
-            self.plot_frame.notebook.select(1)  # Switch to 2D patterns tab
+            # Switch to 2D Patterns tab explicitly by widget
+            try:
+                self.plot_frame.notebook.select(self.plot_frame.pattern_2d_frame)
+            except Exception:
+                pass
             
             # cache last
             self._last_theta = theta

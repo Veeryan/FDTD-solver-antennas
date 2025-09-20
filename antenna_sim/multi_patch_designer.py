@@ -80,12 +80,22 @@ class MultiPatchPanel(ttk.Frame):
         self._control_widgets = []
         self._original_states = {}
         self._controls_container = parent
-        ttk.Label(parent, text="Multi Patch Controls", font=("Segoe UI", 12, "bold")).pack(fill='x', padx=10, pady=(12, 6))
-        btn_add = ttk.Button(parent, text="Add Patch Antenna", command=self._on_add_patch)
+
+        # Notebook with two tabs: Geometry Controls and Simulation Controls
+        notebook = ttk.Notebook(parent)
+        notebook.pack(fill='both', expand=True)
+        tab_controls = ttk.Frame(notebook)
+        tab_sim = ttk.Frame(notebook)
+        notebook.add(tab_controls, text='Geometry Controls')
+        notebook.add(tab_sim, text='Simulation Controls')
+
+        # ---- Geometry tab ----
+        ttk.Label(tab_controls, text="Geometry Controls", font=("Segoe UI", 12, "bold")).pack(fill='x', padx=10, pady=(12, 6))
+        btn_add = ttk.Button(tab_controls, text="Add Patch Antenna", command=self._on_add_patch)
         btn_add.pack(fill='x', padx=10, pady=(0, 10))
         self._control_widgets.append(btn_add)
 
-        sel = ttk.Frame(parent)
+        sel = ttk.Frame(tab_controls)
         sel.pack(fill='x', padx=10, pady=(0, 10))
         ttk.Label(sel, text="Select Patch:").grid(row=0, column=0, sticky='w')
         self.sel_var = tk.StringVar()
@@ -95,7 +105,7 @@ class MultiPatchPanel(ttk.Frame):
         self.sel_combo.bind('<<ComboboxSelected>>', self._on_select_patch)
         self._control_widgets.append(self.sel_combo)
 
-        props = ttk.LabelFrame(parent, text="Selected Patch Properties")
+        props = ttk.LabelFrame(tab_controls, text="Selected Patch Properties")
         props.pack(fill='x', padx=10, pady=(0, 10))
         try:
             props.columnconfigure(1, weight=1)
@@ -151,7 +161,7 @@ class MultiPatchPanel(ttk.Frame):
         mk_row("Rotate Z (°)", self.var_rz, 'rz')
 
         # Display controls
-        disp = ttk.LabelFrame(parent, text="Display")
+        disp = ttk.LabelFrame(tab_controls, text="Display")
         disp.pack(fill='x', padx=10, pady=(0, 10))
         try:
             disp.columnconfigure(1, weight=1)
@@ -172,9 +182,9 @@ class MultiPatchPanel(ttk.Frame):
         self._control_widgets.append(grd)
         self._original_states[grd] = 'readonly'
 
-        # --- Simulation Parameters ---
-        ttk.Label(parent, text="Simulation Parameters", font=("Segoe UI", 12, "bold")).pack(fill='x', padx=10, pady=(10, 6))
-        ff = ttk.LabelFrame(parent, text="Far-Field Sampling")
+        # ---- Simulation tab ----
+        ttk.Label(tab_sim, text="Simulation Controls", font=("Segoe UI", 12, "bold")).pack(fill='x', padx=10, pady=(10, 6))
+        ff = ttk.LabelFrame(tab_sim, text="Far-Field Sampling")
         ff.pack(fill='x', padx=10, pady=(0, 10))
         try:
             ff.columnconfigure(1, weight=1)
@@ -200,7 +210,7 @@ class MultiPatchPanel(ttk.Frame):
             pass
 
         # Mesh quality control (1..5)
-        mesh_frame = ttk.LabelFrame(parent, text="Mesh Quality")
+        mesh_frame = ttk.LabelFrame(tab_sim, text="Mesh Quality")
         mesh_frame.pack(fill='x', padx=10, pady=(0, 10))
         ttk.Label(mesh_frame, text="Resolution").grid(row=0, column=0, sticky='w')
         self.var_mesh_quality = tk.IntVar(value=3)
@@ -238,7 +248,7 @@ class MultiPatchPanel(ttk.Frame):
         self._prev_box_z = 160.0
 
         # NF2FF center control
-        nf_frame = ttk.LabelFrame(parent, text="NF2FF Center")
+        nf_frame = ttk.LabelFrame(tab_sim, text="NF2FF Center")
         nf_frame.pack(fill='x', padx=10, pady=(0, 10))
         ttk.Label(nf_frame, text="Center").grid(row=0, column=0, sticky='w')
         self.var_nf2ff_center = tk.StringVar(value='Origin')
@@ -253,7 +263,7 @@ class MultiPatchPanel(ttk.Frame):
         self._original_states[self.nf_center_combo] = 'readonly'
 
         # Simulation Box controls
-        box_frame = ttk.LabelFrame(parent, text="Simulation Box")
+        box_frame = ttk.LabelFrame(tab_sim, text="Simulation Box")
         box_frame.pack(fill='x', padx=10, pady=(0, 10))
         ttk.Label(box_frame, text="Mode").grid(row=0, column=0, sticky='w')
         self.var_simbox_mode = tk.StringVar(value='Auto')
@@ -309,24 +319,52 @@ class MultiPatchPanel(ttk.Frame):
             self._control_widgets.append(w)
             self._original_states[w] = 'normal'
 
-        # View controls
-        btn_fit = ttk.Button(parent, text="Fit View", command=self._fit_view)
+        # Apply Simulation Parameters button and local status message
+        btn_apply_sim = ttk.Button(tab_sim, text="Apply Simulation Parameters", command=self._apply_sim_params)
+        btn_apply_sim.pack(fill='x', padx=10, pady=(0, 6))
+        self._control_widgets.append(btn_apply_sim)
+        try:
+            self.sim_status_msg = tk.StringVar(value="")
+            self.sim_status_label = ttk.Label(tab_sim, textvariable=self.sim_status_msg)
+            self.sim_status_label.pack(fill='x', padx=10, pady=(0, 6))
+        except Exception:
+            pass
+
+        # Port Diagnostics UI for MultiPatchPanel removed to avoid duplication.
+
+        # View controls (Multi Patch tab)
+        btn_fit = ttk.Button(tab_controls, text="Fit View", command=self._fit_view)
         btn_fit.pack(fill='x', padx=10, pady=(0, 8))
         self._control_widgets.append(btn_fit)
 
-        btn_apply = ttk.Button(parent, text="Apply Changes", command=self._on_apply_changes)
-        btn_apply.pack(fill='x', padx=10, pady=(0, 6))
-        btn_remove = ttk.Button(parent, text="Remove Selected", command=self._on_remove_selected)
+        # Removed "Apply Changes" button (Enter and Set buttons already apply changes)
+        btn_remove = ttk.Button(tab_controls, text="Remove Selected", command=self._on_remove_selected)
         btn_remove.pack(fill='x', padx=10, pady=(0, 6))
-        self._control_widgets.extend([btn_apply, btn_remove])
+        self._control_widgets.extend([btn_remove])
         # Status line for user feedback after applying changes
         try:
             self.status_msg = tk.StringVar(value="")
-            self.status_label = ttk.Label(parent, textvariable=self.status_msg)
+            self.status_label = ttk.Label(tab_controls, textvariable=self.status_msg)
             self.status_label.pack(fill='x', padx=10, pady=(0, 6))
         except Exception:
             pass
-        ttk.Label(parent, text="Tip: Rotate with mouse, scroll to zoom.").pack(fill='x', padx=10, pady=(8, 10))
+        ttk.Label(tab_controls, text="Tip: Rotate with mouse, scroll to zoom.").pack(fill='x', padx=10, pady=(8, 10))
+
+    # ---- Port log helpers (used by GUI thread-safe via root.after) ----
+    def clear_port_log(self):
+        try:
+            if hasattr(self, 'port_log') and self.port_log is not None:
+                self.port_log.delete('1.0', 'end')
+        except Exception:
+            pass
+
+    def append_port_log(self, text: str):
+        try:
+            if hasattr(self, 'port_log') and self.port_log is not None:
+                self.port_log.insert('end', str(text) + '\n')
+                self.port_log.see('end')
+        except Exception:
+            pass
 
     # ---- Enable/disable controls with overlay ----
     def lock_controls(self):
@@ -344,6 +382,16 @@ class MultiPatchPanel(ttk.Frame):
             if self._controls_container is not None and self._disabled_overlay is None:
                 ov = tk.Frame(self._controls_container, bg='#2b2b2b')
                 ov.place(relx=0, rely=0, relwidth=1, relheight=1)
+                try:
+                    ov.lift()  # ensure overlay is above all children
+                except Exception:
+                    pass
+                # Swallow mouse/keyboard events to block interaction
+                try:
+                    for ev in ('<Button-1>','<Button-2>','<Button-3>','<MouseWheel>','<Key>'):
+                        ov.bind(ev, lambda e: 'break')
+                except Exception:
+                    pass
                 msg = tk.Label(ov, text="Locked while simulation is running...", fg='white', bg='#2b2b2b')
                 msg.place(relx=0.5, rely=0.5, anchor='center')
                 self._disabled_overlay = ov
@@ -442,7 +490,10 @@ class MultiPatchPanel(ttk.Frame):
 
     def _rotation_matrix(self, rx_deg: float, ry_deg: float, rz_deg: float):
         """Row-vector transform: world = local @ R.
-        Extrinsic rotations about global X, then Y, then Z."""
+        Extrinsic rotations about global X, then Y, then Z.
+        For CSXCAD's extrinsic order and our row-vector convention, use R = (Rz @ Ry @ Rx).T
+        so the UI matches the solver.
+        """
         rx, ry, rz = np.deg2rad([rx_deg, ry_deg, rz_deg])
         cx, sx = np.cos(rx), np.sin(rx)
         cy, sy = np.cos(ry), np.sin(ry)
@@ -450,7 +501,7 @@ class MultiPatchPanel(ttk.Frame):
         Rx = np.array([[1, 0, 0], [0, cx, -sx], [0, sx, cx]])
         Ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]])
         Rz = np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]])
-        return Rx @ Ry @ Rz
+        return (Rz @ Ry @ Rx).T
 
     def _box_faces(self, center: np.ndarray, W: float, L: float, H: float, R: np.ndarray, omit_top: bool = False, bottom_only: bool = False, sides_only: bool = False) -> List[List[List[float]]]:
         # Local half-dimensions
@@ -685,6 +736,14 @@ class MultiPatchPanel(ttk.Frame):
             except Exception:
                 pass
             self.canvas.draw_idle()
+            # Notify listeners so external views (e.g., PyVista) can also reset their camera
+            try:
+                # Mark last action for host to detect a Fit View request
+                self._last_action = 'fit'
+                if self._change_cb is not None:
+                    self._change_cb(self.patches)
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -870,7 +929,13 @@ class MultiPatchPanel(ttk.Frame):
             # Show status line
             try:
                 if changes:
-                    self.status_msg.set("Applied: " + ", ".join(changes))
+                    msg = "Applied: " + ", ".join(changes)
+                    self.status_msg.set(msg)
+                    try:
+                        # Mirror into sim status as well so it's visible near that section
+                        self.sim_status_msg.set(msg)
+                    except Exception:
+                        pass
                 else:
                     self.status_msg.set("No changes detected.")
             except Exception:
@@ -930,7 +995,15 @@ class MultiPatchPanel(ttk.Frame):
             except Exception:
                 pass
             if changes:
-                self.status_msg.set("Applied: " + ", ".join(changes))
+                msg = "Applied: " + ", ".join(changes)
+                try:
+                    self.status_msg.set(msg)
+                except Exception:
+                    pass
+                try:
+                    self.sim_status_msg.set(msg)
+                except Exception:
+                    pass
         except Exception:
             pass
 

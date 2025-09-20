@@ -39,8 +39,11 @@ def _rot_z(deg: float) -> np.ndarray:
 
 
 def _rotation_matrix(rx_deg: float, ry_deg: float, rz_deg: float) -> np.ndarray:
-    """Extrinsic rotations about global X, then Y, then Z. Row-vector convention: world = local @ R.T + T.
-    Matches MultiPatchPanel._rotation_matrix for consistency.
+    """Extrinsic rotations about global X, then Y, then Z.
+    Row-vector convention used throughout: world = local @ R + T.
+    Important: CSXCAD applies transforms in the given order using column vectors.
+    For extrinsic X->Y->Z, the column-form rotation is: R_col = Rz @ Ry @ Rx.
+    Therefore for our row-vector form, use the transpose: R = R_col.T.
     """
     rx = math.radians(rx_deg)
     ry = math.radians(ry_deg)
@@ -51,13 +54,13 @@ def _rotation_matrix(rx_deg: float, ry_deg: float, rz_deg: float) -> np.ndarray:
     Rx = np.array([[1, 0, 0], [0, cx, -sx], [0, sx, cx]], dtype=float)
     Ry = np.array([[cy, 0, sy], [0, 1, 0], [-sy, 0, cy]], dtype=float)
     Rz = np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]], dtype=float)
-    return Rx @ Ry @ Rz
+    return (Rz @ Ry @ Rx).T
 
 
 def _transform_point_local_to_global(p_local_mm: Sequence[float], R: np.ndarray, T_mm: np.ndarray) -> list[float]:
     p = np.asarray(p_local_mm, dtype=float)
-    # Row-vector: world = R @ p (column) + T -> equivalently p(row) @ R.T + T
-    return (p @ R.T + T_mm).tolist()
+    # Row-vector: world = p(row) @ R + T
+    return (p @ R + T_mm).tolist()
 
 
 def _compute_patch_dims_mm(params: PatchAntennaParams) -> tuple[float, float, float]:
@@ -105,19 +108,21 @@ def prepare_openems_microstrip_multi_3d(
     auto_margin_mm: tuple[float, float, float] = (80.0, 80.0, 160.0),
     manual_size_mm: Optional[tuple[float, float, float]] = None,
     feed_line_length_mm: float = 20.0,
+    port_mode: str = "lumped",  # 'auto' | 'lumped'
     work_dir: str = "openems_out_multi",
     cleanup: bool = True,
     verbose: int = 0,
+    log_cb: Optional[callable] = None,
 ) -> OpenEMSPrepared:
     """Prepare a multi-patch microstrip-fed openEMS 3D simulation.
 
-    - Places each patch instance (substrate, ground, patch, feed) using affine transforms.
-    - Adds a dedicated MSL port per element; all ports are excited simultaneously.
-    - NF2FF is sampled on a dense theta/phi grid like the single-patch 3D solver.
-
-    Initial constraints for stability with MSL ports:
-    - Rotations around X/Y are ignored (treated as 0). Only Z-rotation is supported.
-    - Z-rotation is snapped to the nearest multiple of 90° for correct MSL port orientation.
+    - Full 3D rotations supported via CSXCAD primitive transforms (Rx/Ry/Rz + translation).
+    - Hybrid port strategy per element:
+      - If the substrate normal is aligned with global Z and feed axis with X/Y, use an MSL port.
+      - Otherwise, use a LumpedPort (coax-like) between feed strip and ground at the feed location.
+    - All ports are excited simultaneously with equal amplitude/phase (current design choice).
+    - NF2FF sampled on theta/phi grid; phase center configurable (origin/centroid).
+    - Simulation box can be Auto (from oriented bounds + margins) or Manual.
     """
     try:
         if not patches:
@@ -138,14 +143,14 @@ def prepare_openems_microstrip_multi_3d(
         f0 = float(patches[0].params.frequency_hz)
         fc = f0 / 2.0
 
-        # Build global bounding box (XY) across all rotated substrates
+        # Build global bounding box across all rotated substrates (full 3D)
         all_x: list[float] = []
         all_y: list[float] = []
+        all_z: list[float] = []
         max_h = 0.0
         for inst in patches:
             W_mm, L_mm, h_mm = _compute_patch_dims_mm(inst.params)
             max_h = max(max_h, h_mm)
-            # Substrate size includes margin + feed length depending on feed direction
             substrate_margin = 30.0
             if inst.feed_direction in (FeedDirection.POS_X, FeedDirection.NEG_X):
                 sub_W = W_mm + 2 * substrate_margin + feed_line_length_mm
@@ -153,26 +158,28 @@ def prepare_openems_microstrip_multi_3d(
             else:
                 sub_W = W_mm + 2 * substrate_margin
                 sub_L = L_mm + 2 * substrate_margin + feed_line_length_mm
-            # Local rectangle corners at z=0 in mm
-            half_W, half_L = sub_W / 2.0, sub_L / 2.0
-            corners = np.array([
-                [-half_W, -half_L, 0.0],
-                [ half_W, -half_L, 0.0],
-                [ half_W,  half_L, 0.0],
-                [-half_W,  half_L, 0.0],
-            ])
+            # Build rotation and translation
+            rx, ry, rz = float(getattr(inst, 'rot_x_deg', 0.0)), float(getattr(inst, 'rot_y_deg', 0.0)), float(getattr(inst, 'rot_z_deg', 0.0))
+            R = _rotation_matrix(rx, ry, rz)
             T = np.array([inst.center_x_m * 1e3, inst.center_y_m * 1e3, inst.center_z_m * 1e3], dtype=float)
-            rz_snap = round(float(inst.rot_z_deg) / 90.0) * 90.0
-            R = _rot_z(rz_snap)
-            world = (corners @ R.T) + T
+            # Substrate oriented box corners (local, centered at origin)
+            hx, hy, hz = sub_W/2.0, sub_L/2.0, h_mm/2.0
+            corners = [
+                [-hx,-hy,-hz],[ hx,-hy,-hz],[ hx, hy,-hz],[-hx, hy,-hz],
+                [-hx,-hy, hz],[ hx,-hy, hz],[ hx, hy, hz],[-hx, hy, hz],
+            ]
+            local = np.array(corners, dtype=float)
+            world = (local @ R) + T
             all_x.extend(world[:, 0].tolist())
             all_y.extend(world[:, 1].tolist())
+            all_z.extend(world[:, 2].tolist())
 
         if not all_x or not all_y:
             return OpenEMSPrepared(False, "Failed to derive simulation bounds from patches.")
 
         x_min, x_max = float(min(all_x)), float(max(all_x))
         y_min, y_max = float(min(all_y)), float(max(all_y))
+        z_min, z_max = float(min(all_z)), float(max(all_z))
         # Simulation box sizing
         if (simbox_mode or "auto").lower().startswith('man') and manual_size_mm is not None:
             SimBox_X, SimBox_Y, SimBox_Z = manual_size_mm
@@ -180,10 +187,22 @@ def prepare_openems_microstrip_multi_3d(
             mx, my, mz = auto_margin_mm
             SimBox_X = (x_max - x_min) + 2 * float(mx)
             SimBox_Y = (y_max - y_min) + 2 * float(my)
-            SimBox_Z = max(float(mz), 6 * max_h)
+            SimBox_Z = (z_max - z_min) + 2 * float(mz)
+
+        def _log(msg: str):
+            try:
+                if log_cb is not None:
+                    log_cb(msg)
+                else:
+                    print(msg)
+            except Exception:
+                try:
+                    print(msg)
+                except Exception:
+                    pass
 
         if verbose:
-            print(f"SimBox (mm): X={SimBox_X:.1f} Y={SimBox_Y:.1f} Z={SimBox_Z:.1f}")
+            _log(f"SimBox (mm): X={SimBox_X:.1f} Y={SimBox_Y:.1f} Z={SimBox_Z:.1f}")
 
         # openEMS setup
         FDTD = openEMS(NrTS=30000, EndCriteria=1e-4)
@@ -196,10 +215,10 @@ def prepare_openems_microstrip_multi_3d(
         mesh = CSX.GetGrid()
         mesh.SetDeltaUnit(unit)
 
-        # Base mesh lines
+        # Base mesh lines (symmetric about origin to avoid bias)
         mesh.AddLine('x', [-SimBox_X/2, SimBox_X/2])
         mesh.AddLine('y', [-SimBox_Y/2, SimBox_Y/2])
-        mesh.AddLine('z', [-SimBox_Z/3, SimBox_Z*2/3])
+        mesh.AddLine('z', [-SimBox_Z/2, SimBox_Z/2])
 
         # Mesh resolution driven by quality level (points-per-wavelength)
         try:
@@ -230,7 +249,6 @@ def prepare_openems_microstrip_multi_3d(
             else:
                 sub_W = W_mm + 2 * substrate_margin
                 sub_L = L_mm + 2 * substrate_margin + feed_line_length_mm
-
             # Materials & metals for this element
             substrate_kappa = 2*np.pi*p.frequency_hz * EPS0*p.eps_r * p.loss_tangent
             mat_sub = CSX.AddMaterial(f'substrate_{idx}', epsilon=p.eps_r, kappa=substrate_kappa)
@@ -238,110 +256,244 @@ def prepare_openems_microstrip_multi_3d(
             m_patch = CSX.AddMetal(f'patch_{idx}')
             m_feed = CSX.AddMetal(f'feed_{idx}')
 
-            # Local-to-world placement (no CSX transforms). Z-rotations snapped to 90° multiples only.
+            # Local-to-world placement using rotation matrix + translation (row-vector convention)
             T = np.array([inst.center_x_m * 1e3, inst.center_y_m * 1e3, inst.center_z_m * 1e3], dtype=float)
-            rz_snap = round(float(inst.rot_z_deg) / 90.0) * 90.0
-            R = _rot_z(rz_snap)
-            if verbose and abs(rz_snap - float(inst.rot_z_deg)) > 1e-6:
-                print(f"[warn] '{inst.name}': Z-rotation snapped from {inst.rot_z_deg}° to {rz_snap}° for MSL port alignment.")
-            if (abs(getattr(inst, 'rot_x_deg', 0.0)) > 1e-6) or (abs(getattr(inst, 'rot_y_deg', 0.0)) > 1e-6):
-                print(f"[warn] '{inst.name}': rotations about X/Y are ignored in this version.")
+            rx, ry, rz = float(getattr(inst, 'rot_x_deg', 0.0)), float(getattr(inst, 'rot_y_deg', 0.0)), float(getattr(inst, 'rot_z_deg', 0.0))
+            R = _rotation_matrix(rx, ry, rz)
+            t_cu_mm = max(0.02, float(p.metal.thickness_m) * 1e3)
 
-            # Substrate box from z0..z1 in WORLD coordinates
-            z0 = float(T[2])
-            z1 = z0 + h_mm
-            sub_local_start = [-sub_W/2, -sub_L/2]
-            sub_local_stop  = [ sub_W/2,  sub_L/2]
-            sub0, _ = _rect_bounds_world(sub_local_start[0], sub_local_stop[0], sub_local_start[1], sub_local_stop[1], z0, R, T)
-            _,   sub1 = _rect_bounds_world(sub_local_start[0], sub_local_stop[0], sub_local_start[1], sub_local_stop[1], z1, R, T)
-            sub_start_world = [sub0[0], sub0[1], z0]
-            sub_stop_world  = [sub1[0], sub1[1], z1]
-            mat_sub.AddBox(priority=0, start=sub_start_world, stop=sub_stop_world)
-            # Add vertical mesh refinement across substrate thickness
-            mesh.AddLine('z', np.linspace(z0, z1, 5))
+            # Substrate (centered at local origin)
+            sub_box = mat_sub.AddBox(priority=0, start=[-sub_W/2, -sub_L/2, -h_mm/2], stop=[sub_W/2, sub_L/2, h_mm/2])
+            if abs(rx) > 1e-9: sub_box.AddTransform('RotateAxis', 'x', rx)
+            if abs(ry) > 1e-9: sub_box.AddTransform('RotateAxis', 'y', ry)
+            if abs(rz) > 1e-9: sub_box.AddTransform('RotateAxis', 'z', rz)
+            sub_box.AddTransform('Translate', T.tolist())
+            # Mesh through substrate thickness around its local z span, but along the world axis
+            # that aligns with the rotated substrate normal. This keeps symmetry for rotated boards.
+            try:
+                n_world = np.array([0.0, 0.0, 1.0]) @ R
+                th_axis = int(np.argmax(np.abs(n_world)))  # 0:x, 1:y, 2:z
+                axis_char = 'xyz'[th_axis]
+                # The metal planes are tangential to the thickness axis; choose those two axes for edge meshing
+                plane_dirs = ''.join(ch for i, ch in enumerate('xyz') if i != th_axis)  # e.g., 'yz' if th_axis='x'
+                c = float(T[th_axis])
+                lines = np.linspace(c - h_mm/2, c + h_mm/2, 5)
+                mesh.AddLine(axis_char, lines.tolist())
+                if verbose:
+                    _log(f"           Mesh thickness axis='{axis_char}' lines around {c:.2f}mm; plane_dirs='{plane_dirs}' for edges")
+            except Exception:
+                pass
 
-            # Ground plane (z=z0) in WORLD coordinates
-            gnd_start_world = [sub_start_world[0], sub_start_world[1], z0]
-            gnd_stop_world  = [sub_stop_world[0],  sub_stop_world[1],  z0]
-            m_gnd.AddBox(priority=10, start=gnd_start_world, stop=gnd_stop_world)
-            FDTD.AddEdges2Grid(dirs='xy', properties=m_gnd)
+            # Ground (thin metal) on local bottom face
+            gnd_box = m_gnd.AddBox(priority=10, start=[-sub_W/2, -sub_L/2, -h_mm/2 - t_cu_mm/2], stop=[sub_W/2, sub_L/2, -h_mm/2 + t_cu_mm/2])
+            if abs(rx) > 1e-9: gnd_box.AddTransform('RotateAxis', 'x', rx)
+            if abs(ry) > 1e-9: gnd_box.AddTransform('RotateAxis', 'y', ry)
+            if abs(rz) > 1e-9: gnd_box.AddTransform('RotateAxis', 'z', rz)
+            gnd_box.AddTransform('Translate', T.tolist())
+            try:
+                FDTD.AddEdges2Grid(dirs=plane_dirs, properties=m_gnd)
+            except Exception:
+                FDTD.AddEdges2Grid(dirs='all', properties=m_gnd)
 
-            # Patch (top metal at z=z1) in WORLD coordinates
-            patch_local_start = [-W_mm/2, -L_mm/2]
-            patch_local_stop  = [ W_mm/2,  L_mm/2]
-            p0, p1 = _rect_bounds_world(patch_local_start[0], patch_local_stop[0], patch_local_start[1], patch_local_stop[1], z1, R, T)
-            patch_start_world = [p0[0], p0[1], z1]
-            patch_stop_world  = [p1[0], p1[1], z1]
-            m_patch.AddBox(priority=10, start=patch_start_world, stop=patch_stop_world)
-            FDTD.AddEdges2Grid(dirs='xy', properties=m_patch, metal_edge_res=mesh_res/2)
+            # Patch (thin metal) on local top face
+            patch_box = m_patch.AddBox(priority=10, start=[-W_mm/2, -L_mm/2, h_mm/2 - t_cu_mm/2], stop=[W_mm/2, L_mm/2, h_mm/2 + t_cu_mm/2])
+            if abs(rx) > 1e-9: patch_box.AddTransform('RotateAxis', 'x', rx)
+            if abs(ry) > 1e-9: patch_box.AddTransform('RotateAxis', 'y', ry)
+            if abs(rz) > 1e-9: patch_box.AddTransform('RotateAxis', 'z', rz)
+            patch_box.AddTransform('Translate', T.tolist())
+            try:
+                FDTD.AddEdges2Grid(dirs=plane_dirs, properties=m_patch, metal_edge_res=mesh_res/2)
+            except Exception:
+                FDTD.AddEdges2Grid(dirs='all', properties=m_patch, metal_edge_res=mesh_res/2)
 
-            # Feed line (on top of substrate, z=z1) in WORLD coordinates, plus MSL port
+            # Feed line on local top face
             if inst.feed_direction == FeedDirection.NEG_X:
-                feed_local_start = [-sub_W/2, -feed_w/2]
-                feed_local_stop  = [-W_mm/2,   feed_w/2]
-                port_local_start = [-sub_W/2, -feed_w/2, h_mm]  # local top to bottom
-                port_local_stop  = [-sub_W/2 + min(feed_line_length_mm, (sub_W - W_mm)/2), feed_w/2, 0]
-                feed_axis  = np.array([1.0, 0.0, 0.0])
+                feed_local_start = [-sub_W/2, -feed_w/2, h_mm/2 - t_cu_mm/2]
+                feed_local_stop  = [-W_mm/2,   feed_w/2, h_mm/2 + t_cu_mm/2]
+                feed_axis_local  = np.array([1.0, 0.0, 0.0])
+                feed_point_local = [-W_mm/2, 0.0, h_mm/2]
             elif inst.feed_direction == FeedDirection.POS_X:
-                feed_local_start = [ W_mm/2,  -feed_w/2]
-                feed_local_stop  = [ sub_W/2,  feed_w/2]
-                port_local_start = [ sub_W/2, -feed_w/2, h_mm]
-                port_local_stop  = [ sub_W/2 - min(feed_line_length_mm, (sub_W - W_mm)/2), feed_w/2, 0]
-                feed_axis  = np.array([1.0, 0.0, 0.0])
+                feed_local_start = [ W_mm/2,  -feed_w/2, h_mm/2 - t_cu_mm/2]
+                feed_local_stop  = [ sub_W/2,  feed_w/2, h_mm/2 + t_cu_mm/2]
+                feed_axis_local  = np.array([1.0, 0.0, 0.0])
+                feed_point_local = [ W_mm/2, 0.0, h_mm/2]
             elif inst.feed_direction == FeedDirection.NEG_Y:
-                feed_local_start = [-feed_w/2, -sub_L/2]
-                feed_local_stop  = [ feed_w/2, -L_mm/2]
-                port_local_start = [-feed_w/2, -sub_L/2, h_mm]
-                port_local_stop  = [ feed_w/2, -sub_L/2 + min(feed_line_length_mm, (sub_L - L_mm)/2), 0]
-                feed_axis  = np.array([0.0, 1.0, 0.0])
+                feed_local_start = [-feed_w/2, -sub_L/2, h_mm/2 - t_cu_mm/2]
+                feed_local_stop  = [ feed_w/2, -L_mm/2,  h_mm/2 + t_cu_mm/2]
+                feed_axis_local  = np.array([0.0, 1.0, 0.0])
+                feed_point_local = [0.0, -L_mm/2, h_mm/2]
             else:  # POS_Y
-                feed_local_start = [-feed_w/2,  L_mm/2]
-                feed_local_stop  = [ feed_w/2,  sub_L/2]
-                port_local_start = [-feed_w/2,  sub_L/2, h_mm]
-                port_local_stop  = [ feed_w/2,  sub_L/2 - min(feed_line_length_mm, (sub_L - L_mm)/2), 0]
-                feed_axis  = np.array([0.0, 1.0, 0.0])
+                feed_local_start = [-feed_w/2,  L_mm/2,  h_mm/2 - t_cu_mm/2]
+                feed_local_stop  = [ feed_w/2,  sub_L/2, h_mm/2 + t_cu_mm/2]
+                feed_axis_local  = np.array([0.0, 1.0, 0.0])
+                feed_point_local = [0.0,  L_mm/2, h_mm/2]
 
-            # Feed metal bounds in WORLD
-            x0 = min(feed_local_start[0], feed_local_stop[0])
-            x1 = max(feed_local_start[0], feed_local_stop[0])
-            y0 = min(feed_local_start[1], feed_local_stop[1])
-            y1 = max(feed_local_start[1], feed_local_stop[1])
-            fs, fe = _rect_bounds_world(x0, x1, y0, y1, z1, R, T)
-            m_feed.AddBox(priority=10, start=fs, stop=fe)
-            FDTD.AddEdges2Grid(dirs='xy', properties=m_feed, metal_edge_res=mesh_res/2)
+            feed_box = m_feed.AddBox(priority=10, start=feed_local_start, stop=feed_local_stop)
+            if abs(rx) > 1e-9: feed_box.AddTransform('RotateAxis', 'x', rx)
+            if abs(ry) > 1e-9: feed_box.AddTransform('RotateAxis', 'y', ry)
+            if abs(rz) > 1e-9: feed_box.AddTransform('RotateAxis', 'z', rz)
+            feed_box.AddTransform('Translate', T.tolist())
+            try:
+                FDTD.AddEdges2Grid(dirs=plane_dirs, properties=m_feed, metal_edge_res=mesh_res/2)
+            except Exception:
+                FDTD.AddEdges2Grid(dirs='all', properties=m_feed, metal_edge_res=mesh_res/2)
 
-            # Port placement in WORLD coordinates
-            p_start = _transform_point_local_to_global(port_local_start, R, T)
-            p_stop  = _transform_point_local_to_global(port_local_stop,  R, T)
-            axis_dir_world = R @ feed_axis
-            port_dir = 'x' if abs(axis_dir_world[0]) >= abs(axis_dir_world[1]) else 'y'
+            # Determine port strategy: MSL if axis-aligned; else Lumped
+            # Compute world directions with rotation matrix
+            normal_world = np.array([0.0, 0.0, 1.0]) @ R
+            normal_world = normal_world / max(1e-12, np.linalg.norm(normal_world))
+            feed_axis_world = feed_axis_local @ R
+            feed_axis_world = feed_axis_world / max(1e-12, np.linalg.norm(feed_axis_world))
+            aligned_normal = abs(normal_world[2]) >= 0.9999  # substrate normal ~ z
+            aligned_feed = (abs(feed_axis_world[0]) >= 0.9999) or (abs(feed_axis_world[1]) >= 0.9999)
+            use_msl = (port_mode.lower() == 'auto') and (aligned_normal and aligned_feed)
+            if verbose:
+                _log(f"Patch {idx}: center(mm)={np.round(T,3).tolist()} rot(deg)=(x={rx:g},y={ry:g},z={rz:g})")
+                _log(f"           normal_world={np.round(normal_world,6)} feed_axis_world={np.round(feed_axis_world,6)} port_mode={port_mode} -> port={'MSL' if use_msl else 'Lumped'}")
 
-            # Ensure sufficient mesh lines along propagation direction near the port (>=5 lines)
-            if port_dir == 'x':
-                x_min = min(p_start[0], p_stop[0])
-                x_max = max(p_start[0], p_stop[0])
-                width = abs(fe[1] - fs[1])
-                # Dense lines across propagation segment
-                mesh.AddLine('x', np.linspace(x_min - max(1.0, width), x_max + max(1.0, width), 7))
-                # Feed width refinement (perpendicular direction)
-                y_c = 0.5 * (fs[1] + fe[1])
-                mesh.AddLine('y', [fs[1], y_c, fe[1]])
-            else:  # port_dir == 'y'
-                y_min = min(p_start[1], p_stop[1])
-                y_max = max(p_start[1], p_stop[1])
-                width = abs(fe[0] - fs[0])
-                mesh.AddLine('y', np.linspace(y_min - max(1.0, width), y_max + max(1.0, width), 7))
-                x_c = 0.5 * (fs[0] + fe[0])
-                mesh.AddLine('x', [fs[0], x_c, fe[0]])
-
-            # Add the MSL port
-            FDTD.AddMSLPort(
-                idx, m_feed, p_start, p_stop, port_dir, 'z',
-                excite=-1,
-                FeedShift=10*mesh_res,
-                MeasPlaneShift=feed_line_length_mm/4,
-                priority=5,
-            )
+            if use_msl:
+                # Reuse prior MSL local port definition: start at top into dielectric
+                if inst.feed_direction == FeedDirection.NEG_X:
+                    # local top (+h/2) to bottom (-h/2)
+                    port_local_start = [-sub_W/2, -feed_w/2, +h_mm/2]
+                    port_local_stop  = [-sub_W/2 + min(feed_line_length_mm, (sub_W - W_mm)/2), +feed_w/2, -h_mm/2]
+                elif inst.feed_direction == FeedDirection.POS_X:
+                    port_local_start = [ +sub_W/2, -feed_w/2, +h_mm/2]
+                    port_local_stop  = [ +sub_W/2 - min(feed_line_length_mm, (sub_W - W_mm)/2), +feed_w/2, -h_mm/2]
+                elif inst.feed_direction == FeedDirection.NEG_Y:
+                    port_local_start = [ -feed_w/2, -sub_L/2, +h_mm/2]
+                    port_local_stop  = [ +feed_w/2, -sub_L/2 + min(feed_line_length_mm, (sub_L - L_mm)/2), -h_mm/2]
+                else:
+                    port_local_start = [ -feed_w/2,  +sub_L/2, +h_mm/2]
+                    port_local_stop  = [ +feed_w/2,  +sub_L/2 - min(feed_line_length_mm, (sub_L - L_mm)/2), -h_mm/2]
+                # Choose global port_dir by world orientation of the feed axis
+                if abs(feed_axis_world[0]) >= 0.999:
+                    port_dir = 'x'
+                elif abs(feed_axis_world[1]) >= 0.999:
+                    port_dir = 'y'
+                else:
+                    # Should not happen due to use_msl gating; fallback to lumped behavior
+                    use_msl = False
+                    port_dir = 'x'
+                p_start = _transform_point_local_to_global(port_local_start, R, T)
+                p_stop  = _transform_point_local_to_global(port_local_stop,  R, T)
+                # Mesh refinement along propagation
+                try:
+                    if port_dir == 'x':
+                        x_min = min(p_start[0], p_stop[0]); x_max = max(p_start[0], p_stop[0])
+                        mesh.AddLine('x', np.linspace(x_min - max(1.0, feed_w), x_max + max(1.0, feed_w), 7))
+                    else:
+                        y_min = min(p_start[1], p_stop[1]); y_max = max(p_start[1], p_stop[1])
+                        mesh.AddLine('y', np.linspace(y_min - max(1.0, feed_w), y_max + max(1.0, feed_w), 7))
+                except Exception:
+                    pass
+                # Stable defaults: positive shifts independent of direction
+                feed_shift = float(10*mesh_res)
+                meas_shift = float(feed_line_length_mm/4)
+                if verbose:
+                    _log(f"           MSLPort[{idx}] dir={port_dir} start={np.round(p_start,2)} stop={np.round(p_stop,2)} excite=+1")
+                FDTD.AddMSLPort(idx, m_feed, p_start, p_stop, port_dir, 'z', excite=-1,
+                                FeedShift=feed_shift, MeasPlaneShift=meas_shift, priority=5)
+                # Diagnostics: check that the port lies across the substrate thickness and aligns with normal/feed axes
+                if verbose:
+                    try:
+                        # Top/bottom plane centers in world
+                        top_c  = _transform_point_local_to_global([0.0, 0.0, +h_mm/2], R, T)
+                        bot_c  = _transform_point_local_to_global([0.0, 0.0, -h_mm/2], R, T)
+                        v = np.array(p_stop) - np.array(p_start)
+                        v_n = v / max(1e-12, np.linalg.norm(v))
+                        nw = np.array(normal_world)
+                        nw_n = nw / max(1e-12, np.linalg.norm(nw))
+                        align = float(np.dot(v_n, -nw_n))  # expect ~+1 (top->bottom)
+                        # Signed distances of endpoints from the planes
+                        def plane_signed_dist(P, Pc, n):
+                            return float(np.dot(np.array(P) - np.array(Pc), n / max(1e-12, np.linalg.norm(n))))
+                        ds_top  = plane_signed_dist(p_start, top_c, nw)
+                        ds_bot  = plane_signed_dist(p_stop,  bot_c, nw)
+                        _log(f"           diag: v_norm·(-n)={align:.5f}  d(start,top)={ds_top:.5f}mm  d(stop,bot)={ds_bot:.5f}mm")
+                        # Feed axis vs port_dir
+                        if port_dir == 'x':
+                            pax = abs(feed_axis_world[0])
+                            _log(f"           diag: feed_axis_world.x={pax:.6f} (expect ~1)")
+                        else:
+                            pay = abs(feed_axis_world[1])
+                            _log(f"           diag: feed_axis_world.y={pay:.6f} (expect ~1)")
+                    except Exception:
+                        pass
+            else:
+                # Lumped port at feed location bridging patch to ground along nearest world axis
+                c_world = _transform_point_local_to_global(feed_point_local, R, T)
+                axis = int(np.argmax(np.abs(normal_world)))
+                # p_dir for AddLumpedPort must be axis index (0:x,1:y,2:z)
+                p_dir = axis
+                # Projected thickness along chosen axis; ensure span traverses full dielectric thickness
+                comp = float(abs(normal_world[axis])) if float(abs(normal_world[axis])) > 1e-6 else 1.0
+                # Use exact world coordinates of ground/patch planes along this axis for robust contact
+                ground_c = _transform_point_local_to_global([0.0, 0.0, -h_mm/2], R, T)
+                patch_c  = _transform_point_local_to_global([0.0, 0.0, +h_mm/2], R, T)
+                eps = max(0.1, 0.25*mesh_res)  # small extension to ensure overlap with metal thickness
+                # Previous stable behavior: derive min/max span and order start->stop so vector aligns with +normal_world
+                axis_vals = sorted([ground_c[axis], patch_c[axis]])
+                axis_min = float(axis_vals[0] - eps)
+                axis_max = float(axis_vals[1] + eps)
+                half_w = max(0.5, 0.5 * float(feed_w))
+                half_other = max(0.5, 0.5 * float(feed_w))
+                sgn = 1.0 if float(normal_world[axis]) >= 0.0 else -1.0
+                if axis == 0:
+                    s0, s1 = (axis_min, axis_max) if sgn >= 0 else (axis_max, axis_min)
+                    start = [s0, c_world[1] - half_w, c_world[2] - half_other]
+                    stop  = [s1, c_world[1] + half_w, c_world[2] + half_other]
+                elif axis == 1:
+                    s0, s1 = (axis_min, axis_max) if sgn >= 0 else (axis_max, axis_min)
+                    start = [c_world[0] - half_w, s0, c_world[2] - half_other]
+                    stop  = [c_world[0] + half_w, s1, c_world[2] + half_other]
+                else:  # axis == 2
+                    s0, s1 = (axis_min, axis_max) if sgn >= 0 else (axis_max, axis_min)
+                    start = [c_world[0] - half_w, c_world[1] - half_other, s0]
+                    stop  = [c_world[0] + half_w, c_world[1] + half_other, s1]
+                # Local mesh refinement around port
+                try:
+                    if axis == 2:
+                        mesh.AddLine('z', [start[2], c_world[2], stop[2]])
+                        mesh.AddLine('x', [start[0], c_world[0], stop[0]])
+                        mesh.AddLine('y', [start[1], c_world[1], stop[1]])
+                    elif axis == 0:
+                        mesh.AddLine('x', [start[0], c_world[0], stop[0]])
+                        mesh.AddLine('y', [start[1], c_world[1], stop[1]])
+                        mesh.AddLine('z', [start[2], c_world[2], stop[2]])
+                    else:
+                        mesh.AddLine('y', [start[1], c_world[1], stop[1]])
+                        mesh.AddLine('x', [start[0], c_world[0], stop[0]])
+                        mesh.AddLine('z', [start[2], c_world[2], stop[2]])
+                except Exception:
+                    pass
+                if verbose:
+                    _log(f"           LumpedPort[{idx}] axis={p_dir} start={np.round(start,2)} stop={np.round(stop,2)} excite=+1")
+                # Choose edges2grid plane perpendicular to the port axis for better local meshing
+                try:
+                    port_edges_dirs = ''.join(ch for i, ch in enumerate('xyz') if i != p_dir)
+                except Exception:
+                    port_edges_dirs = 'xy'
+                FDTD.AddLumpedPort(idx, 50.0, start, stop, p_dir, excite=+1, priority=5, edges2grid=port_edges_dirs)
+                # Diagnostics for lumped port alignment
+                if verbose:
+                    try:
+                        v = np.array(stop) - np.array(start)
+                        axis_span = float(abs(v[p_dir]))
+                        lateral_span = float(np.linalg.norm(np.delete(v, p_dir)))
+                        diag_span = float(np.linalg.norm(v))
+                        axis_ratio = axis_span / max(1e-12, diag_span)
+                        # Distances of start/stop to ground/patch planes along the rotated normal
+                        n = np.array(normal_world); n = n / max(1e-12, np.linalg.norm(n))
+                        # Recompute centers used above
+                        ground_c = _transform_point_local_to_global([0.0, 0.0, -h_mm/2], R, T)
+                        patch_c  = _transform_point_local_to_global([0.0, 0.0, +h_mm/2], R, T)
+                        d_start_ground = float(np.dot(np.array(start) - ground_c, n))
+                        d_stop_patch   = float(np.dot(np.array(stop)  - patch_c,  n))
+                        _log(f"           diag: axis_span={axis_span:.3f}mm lateral_span={lateral_span:.3f}mm axis_ratio={axis_ratio:.3f}")
+                        _log(f"           diag: d(start,ground-plane)={d_start_ground:.3f}mm  d(stop,patch-plane)={d_stop_patch:.3f}mm")
+                    except Exception:
+                        pass
 
         mesh.SmoothMeshLines('all', mesh_res, 1.4)
         nf2ff = FDTD.CreateNF2FFBox()
