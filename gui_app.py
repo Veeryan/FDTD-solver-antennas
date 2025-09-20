@@ -909,6 +909,19 @@ class PlotFrame(ttk.Frame):
     def _update_pv_view(self, patches):
         try:
             if self.pv_view is not None and self.pv_view.available:
+                # Mirror MultiPatchPanel display toggles into PyVista view
+                try:
+                    show_sub = bool(self.multi_panel.var_show_substrate.get()) if getattr(self, 'multi_panel', None) else True
+                except Exception:
+                    show_sub = True
+                try:
+                    show_gnd = bool(self.multi_panel.var_show_ground.get()) if getattr(self, 'multi_panel', None) else True
+                except Exception:
+                    show_gnd = True
+                try:
+                    self.pv_view.set_display_options(show_substrate=show_sub, show_ground=show_gnd)
+                except Exception:
+                    pass
                 self.pv_view.rebuild(patches)
         except Exception:
             pass
@@ -1323,6 +1336,9 @@ class PyVistaMultiAntennaView(ttk.Frame):
             'z': {'mesh': None, 'actor': None},
         }
         self._scene_char_len = 0.5  # characteristic length of the scene (updated per rebuild)
+        # Display options controlled by MultiPatchPanel checkboxes
+        self.show_substrate = True
+        self.show_ground = True
         # Optional camera toolbar removed to maximize embedded view area
         self._toolbar = None
         try:
@@ -1520,8 +1536,8 @@ class PyVistaMultiAntennaView(ttk.Frame):
                             # Use logical TK pixels; embedding uses same coordinate space as host
                             user32.MoveWindow(self._hwnd_qt, 0, 0, int(w2), int(h2), True)
                             try:
-                                # Also tell Qt about the new size
-                                self._plotter.resize(int(w2), int(h2))
+                                # Avoid explicit Qt .resize calls to prevent Windows geometry conflicts
+                                # Rely on MoveWindow + Qt update/render only.
                                 self._plotter.update()
                                 try:
                                     self._plotter.render()
@@ -1649,6 +1665,16 @@ class PyVistaMultiAntennaView(ttk.Frame):
         Rz = np.array([[cz, -sz, 0], [sz, cz, 0], [0, 0, 1]])
         return Rx @ Ry @ Rz
 
+    # Allow the host app to toggle visibility of substrate and ground
+    def set_display_options(self, show_substrate: bool | None = None, show_ground: bool | None = None):
+        try:
+            if show_substrate is not None:
+                self.show_substrate = bool(show_substrate)
+            if show_ground is not None:
+                self.show_ground = bool(show_ground)
+        except Exception:
+            pass
+
     # ---- External PyVista fallback ----
     def _open_or_focus_external(self):
         try:
@@ -1765,9 +1791,11 @@ class PyVistaMultiAntennaView(ttk.Frame):
                 sub_L = L_m + 2*margin
                 sub_W = W_m + 2*margin
                 sub_center = C + (np.array([0,0,-(t_patch/2 + h/2)]) @ R)
-                self._pv_box(plotter, (sub_W, sub_L, h), sub_center, angles, color_rgb=color_sub, opacity=1.0, show_edges=True)
+                if getattr(self, 'show_substrate', True):
+                    self._pv_box(plotter, (sub_W, sub_L, h), sub_center, angles, color_rgb=color_sub, opacity=1.0, show_edges=True)
                 gnd_center = C + (np.array([0,0,-(t_patch/2 + h + t_ground/2)]) @ R)
-                self._pv_box(plotter, (sub_W, sub_L, t_ground), gnd_center, angles, color_rgb=color_gnd, opacity=0.98, show_edges=False)
+                if getattr(self, 'show_ground', True):
+                    self._pv_box(plotter, (sub_W, sub_L, t_ground), gnd_center, angles, color_rgb=color_gnd, opacity=0.98, show_edges=False)
                 self._pv_box(plotter, (W_m, L_m, t_patch), C, angles, color_rgb=color_patch, opacity=1.0, show_edges=False)
                 from antenna_sim.solver_fdtd_openems_microstrip import calculate_microstrip_width, FeedDirection
                 fw = calculate_microstrip_width(inst.params.frequency_hz, inst.params.eps_r, inst.params.h_m)
@@ -2889,10 +2917,30 @@ class AntennaSimulatorGUI:
             theta = result.theta
             phi = result.phi
             intensity = np.asarray(result.intensity)
+            # Determine the frequency actually used for this simulation
+            f_used = None
+            try:
+                if getattr(self.plot_frame, 'mode', 'single') == 'multi':
+                    patches = list(getattr(self.plot_frame, 'multi_panel', None).patches or []) if getattr(self.plot_frame, 'multi_panel', None) else []
+                    if patches:
+                        f_used = float(patches[0].params.frequency_hz)
+            except Exception:
+                f_used = None
+            if f_used is None:
+                try:
+                    f_used = float(self.current_params.frequency_hz)
+                except Exception:
+                    f_used = None
+            # Lightweight object for plot functions that expect .frequency_hz
+            try:
+                from types import SimpleNamespace
+                params_for_plot = SimpleNamespace(frequency_hz=f_used if f_used is not None else 0.0)
+            except Exception:
+                params_for_plot = self.current_params
             
             # If we have a full 3D grid (theta x phi), show 3D pattern directly
             if intensity.ndim == 2 and phi is not None and theta is not None and intensity.shape == (len(theta), len(phi)):
-                self.plot_frame.update_3d_pattern(theta, phi, intensity, self.current_params, norm_mode=self.param_frame.vars['norm_mode'].get())
+                self.plot_frame.update_3d_pattern(theta, phi, intensity, params_for_plot, norm_mode=self.param_frame.vars['norm_mode'].get())
                 # Also synthesize E/H plane cuts for 2D tab: phi=0 and phi=90
                 try:
                     phi_vals = np.asarray(phi)
@@ -2905,7 +2953,7 @@ class AntennaSimulatorGUI:
             else:
                 # Fall back to existing behavior: update 2D cuts first, then 3D interpolation
                 self.plot_frame.update_2d_patterns(theta, intensity)
-                self.plot_frame.update_3d_pattern(theta, phi, intensity, self.current_params, norm_mode=self.param_frame.vars['norm_mode'].get())
+                self.plot_frame.update_3d_pattern(theta, phi, intensity, params_for_plot, norm_mode=self.param_frame.vars['norm_mode'].get())
             
             # Switch to results tab
             # Switch to 2D Patterns tab explicitly by widget
@@ -2918,7 +2966,7 @@ class AntennaSimulatorGUI:
             self._last_theta = theta
             self._last_phi = phi
             self._last_intensity = intensity
-            self._last_params = self.current_params
+            self._last_params = params_for_plot
             
         except Exception as e:
             print(f"Error updating simulation results: {e}")

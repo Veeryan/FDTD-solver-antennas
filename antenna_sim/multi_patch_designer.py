@@ -99,11 +99,14 @@ class MultiPatchPanel(ttk.Frame):
         sel.pack(fill='x', padx=10, pady=(0, 10))
         ttk.Label(sel, text="Select Patch:").grid(row=0, column=0, sticky='w')
         self.sel_var = tk.StringVar()
+        # Strictly dropdown-only (no free text)
         self.sel_combo = ttk.Combobox(sel, textvariable=self.sel_var, state='readonly')
         self.sel_combo.grid(row=0, column=1, sticky='ew', padx=(6, 0))
         sel.columnconfigure(1, weight=1)
         self.sel_combo.bind('<<ComboboxSelected>>', self._on_select_patch)
         self._control_widgets.append(self.sel_combo)
+        # Track original state to keep it readonly after lock/unlock cycles
+        self._original_states[self.sel_combo] = 'readonly'
 
         props = ttk.LabelFrame(tab_controls, text="Selected Patch Properties")
         props.pack(fill='x', padx=10, pady=(0, 10))
@@ -125,6 +128,8 @@ class MultiPatchPanel(ttk.Frame):
         self.var_rz = tk.DoubleVar(value=0.0)
         # Z translation
         self.var_cz = tk.DoubleVar(value=0.0)
+        # Feed direction per patch
+        self.var_feed_dir = tk.StringVar(value=FeedDirection.NEG_X.value)
 
         r = 0
         def mk_row(lbl, entry_var, field_key, is_combo=False):
@@ -159,6 +164,21 @@ class MultiPatchPanel(ttk.Frame):
         mk_row("Rotate X (°)", self.var_rx, 'rx')
         mk_row("Rotate Y (°)", self.var_ry, 'ry')
         mk_row("Rotate Z (°)", self.var_rz, 'rz')
+        # Feed direction selector (values from FeedDirection enum)
+        ttk.Label(props, text="Feed Direction").grid(row=r, column=0, sticky='w')
+        self.feed_combo = ttk.Combobox(props, textvariable=self.var_feed_dir, state='readonly',
+                                       values=[d.value for d in FeedDirection])
+        self.feed_combo.grid(row=r, column=1, sticky='ew')
+        try:
+            self.feed_combo.bind('<<ComboboxSelected>>', lambda ev: self._apply_single_field('feed_dir'))
+        except Exception:
+            pass
+        self._control_widgets.append(self.feed_combo)
+        self._original_states[self.feed_combo] = 'readonly'
+        btn_feed = ttk.Button(props, text='Set', width=6, command=lambda: self._apply_single_field('feed_dir'))
+        btn_feed.grid(row=r, column=2, padx=(6,0))
+        self._control_widgets.append(btn_feed)
+        r += 1
 
         # Display controls
         disp = ttk.LabelFrame(tab_controls, text="Display")
@@ -169,18 +189,11 @@ class MultiPatchPanel(ttk.Frame):
             pass
         self.var_show_substrate = tk.BooleanVar(value=True)
         self.var_show_ground = tk.BooleanVar(value=True)
-        self.var_ground_style = tk.StringVar(value='edges')  # 'edges' | 'ring'
         cb1 = ttk.Checkbutton(disp, text="Show substrate", variable=self.var_show_substrate, command=self._draw_scene)
         cb1.grid(row=0, column=0, sticky='w')
         cb2 = ttk.Checkbutton(disp, text="Show ground", variable=self.var_show_ground, command=self._draw_scene)
         cb2.grid(row=0, column=1, sticky='w', padx=(10,0))
         self._control_widgets.extend([cb1, cb2])
-        ttk.Label(disp, text="Ground style").grid(row=1, column=0, sticky='w')
-        grd = ttk.Combobox(disp, textvariable=self.var_ground_style, state='readonly', values=['edges','ring'])
-        grd.grid(row=1, column=1, sticky='ew')
-        grd.bind('<<ComboboxSelected>>', lambda ev: self._draw_scene())
-        self._control_widgets.append(grd)
-        self._original_states[grd] = 'readonly'
 
         # ---- Simulation tab ----
         ttk.Label(tab_sim, text="Simulation Controls", font=("Segoe UI", 12, "bold")).pack(fill='x', padx=10, pady=(10, 6))
@@ -621,25 +634,22 @@ class MultiPatchPanel(ttk.Frame):
         # Ground plane (gray), bottom of substrate
         if getattr(self, 'var_show_ground', None) is None or self.var_show_ground.get():
             gnd_center = C + (np.array([0,0,-(t_patch/2 + max(8e-4, 0.01 * max(L_m, W_m)) + h + t_ground/2)]) @ R)
-            ground_style = getattr(self, 'var_ground_style', None).get() if getattr(self, 'var_ground_style', None) else 'edges'
-            if ground_style == 'edges':
-                # Draw only the top edges to avoid occluding the patch
-                gnd_edges = self._box_edges(gnd_center, sub_W, sub_L, t_ground, R, which='top')
-                ground = Line3DCollection(gnd_edges, colors='#b87333', linewidths=1.6, alpha=0.95)
-                try:
-                    ground.set_zorder(5)
-                except Exception:
-                    pass
-                self.ax.add_collection3d(ground)
-            else:
-                # Render a top ring on the ground as a face so it's visible but never occludes patch center
-                g_ring = self._substrate_top_ring(gnd_center, sub_W, sub_L, t_ground, R, inner_W=W_m, inner_L=L_m, ring_gap=max(8e-4, 0.01*max(L_m, W_m)))
-                ground = Poly3DCollection(g_ring, alpha=0.7, facecolor='#b87333', edgecolor='#a35f2d', linewidth=0.8)
-                try:
-                    ground.set_zorder(6)
-                except Exception:
-                    pass
-                self.ax.add_collection3d(ground)
+            # Draw the full copper plane as the top face of the ground sheet
+            local_top = np.array([
+                [-sub_W/2, -sub_L/2, +t_ground/2],
+                [ +sub_W/2, -sub_L/2, +t_ground/2],
+                [ +sub_W/2,  +sub_L/2, +t_ground/2],
+                [-sub_W/2,  +sub_L/2, +t_ground/2],
+            ])
+            world_top = (local_top @ R) + gnd_center
+            g_face = [world_top.tolist()]
+            ground = Poly3DCollection(g_face, alpha=0.7, facecolor='#b87333', edgecolor='#a35f2d', linewidth=0.8)
+            try:
+                ground.set_zorder(6)
+                ground.set_zsort('min')
+            except Exception:
+                pass
+            self.ax.add_collection3d(ground)
 
         # Patch box (gold), centered at C, thickness symmetric about z=0 (draw last for visibility)
         patch_faces = self._box_faces(C, W_m, L_m, t_patch, R)
@@ -775,7 +785,11 @@ class MultiPatchPanel(ttk.Frame):
                 patch_width_m=None,
             )
             name = f"Patch {len(self.patches)+1}"
-            inst = PatchInstance(name=name, params=p, center_x_m=0.0, center_y_m=0.0, center_z_m=0.0)
+            try:
+                fd = FeedDirection(self.var_feed_dir.get())
+            except Exception:
+                fd = FeedDirection.NEG_X
+            inst = PatchInstance(name=name, params=p, center_x_m=0.0, center_y_m=0.0, center_z_m=0.0, feed_direction=fd)
             self.patches.append(inst)
             self._refresh_selector(select_index=len(self.patches)-1)
             self._draw_scene()
@@ -817,6 +831,10 @@ class MultiPatchPanel(ttk.Frame):
         self.var_rx.set(p.rot_x_deg)
         self.var_ry.set(p.rot_y_deg)
         self.var_rz.set(p.rot_z_deg)
+        try:
+            self.var_feed_dir.set(p.feed_direction.value)
+        except Exception:
+            self.var_feed_dir.set(FeedDirection.NEG_X.value)
         # best-effort mapping back to enum name
         try:
             for m in Metal:
@@ -1037,6 +1055,11 @@ class MultiPatchPanel(ttk.Frame):
                 p.rot_y_deg = float(self.var_ry.get())
             elif field == 'rz':
                 p.rot_z_deg = float(self.var_rz.get())
+            elif field == 'feed_dir':
+                try:
+                    p.feed_direction = FeedDirection(self.var_feed_dir.get())
+                except Exception:
+                    pass
             elif field == 'freq':
                 p.params = self._rebuild_params(p, frequency_hz=float(self.var_freq.get())*1e9)
             elif field == 'eps':
