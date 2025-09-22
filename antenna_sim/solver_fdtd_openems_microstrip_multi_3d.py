@@ -423,7 +423,15 @@ def prepare_openems_microstrip_multi_3d(
             else:
                 # Lumped port at feed location bridging patch to ground along nearest world axis
                 c_world = _transform_point_local_to_global(feed_point_local, R, T)
-                axis = int(np.argmax(np.abs(normal_world)))
+                # Choose world axis most aligned with substrate normal
+                # Prefer Z in near-tie cases to span thickness more robustly for yaw rotations
+                absn = np.abs(normal_world)
+                axis = int(np.argmax(absn))
+                try:
+                    if abs(absn[2] - absn[axis]) < 1e-6:
+                        axis = 2
+                except Exception:
+                    pass
                 # p_dir for AddLumpedPort must be axis index (0:x,1:y,2:z)
                 p_dir = axis
                 # Projected thickness along chosen axis; ensure span traverses full dielectric thickness
@@ -436,8 +444,9 @@ def prepare_openems_microstrip_multi_3d(
                 axis_vals = sorted([ground_c[axis], patch_c[axis]])
                 axis_min = float(axis_vals[0] - eps)
                 axis_max = float(axis_vals[1] + eps)
-                half_w = max(0.5, 0.5 * float(feed_w))
-                half_other = max(0.5, 0.5 * float(feed_w))
+                # Slightly larger cross-section improves contact on coarse meshes when rotated
+                half_w = max(1.0, 0.75 * float(feed_w))
+                half_other = max(1.0, 0.75 * float(feed_w))
                 sgn = 1.0 if float(normal_world[axis]) >= 0.0 else -1.0
                 if axis == 0:
                     s0, s1 = (axis_min, axis_max) if sgn >= 0 else (axis_max, axis_min)

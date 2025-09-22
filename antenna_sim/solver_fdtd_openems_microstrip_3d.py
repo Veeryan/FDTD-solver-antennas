@@ -77,10 +77,16 @@ def prepare_openems_microstrip_patch_3d(
             print(f"Substrate: {substrate_W:.1f} x {substrate_L:.1f} x {h:.3f} mm")
             print(f"Feed line: width={feed_width:.2f} mm, length={feed_len:.1f} mm")
             print(f"Feed direction: {feed_direction}")
+            print(f"SimBox (mm): X={SimBox_X:.1f} Y={SimBox_Y:.1f} Z={SimBox_Z:.1f}")
 
         FDTD = openEMS(NrTS=30000, EndCriteria=1e-4)
         FDTD.SetGaussExcite(f0, fc)
         bc = ['MUR'] * 6 if boundary.upper().startswith('MUR') else ['PML_8'] * 6
+        if verbose:
+            try:
+                print(f"Boundary: {bc[0]} on all sides")
+            except Exception:
+                pass
         FDTD.SetBoundaryCond(bc)
 
         CSX = ContinuousStructure()

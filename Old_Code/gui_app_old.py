@@ -189,35 +189,9 @@ class ParameterFrame(ttk.Frame):
         ttk.Label(params_frame, text="Boundary:").grid(row=7, column=0, sticky='w', pady=2)
         self.vars['boundary'] = tk.StringVar(value="MUR")
         boundary_combo = ttk.Combobox(params_frame, textvariable=self.vars['boundary'], width=12)
-        # Provide supported boundary choices in openEMS
         boundary_combo['values'] = ["MUR", "PML_8"]
         boundary_combo.grid(row=7, column=1, sticky='ew', padx=(5,0), pady=2)
         boundary_combo.state(['readonly'])
-        # Speed hint label (fast/medium/slow)
-        try:
-            self.boundary_speed = ttk.Label(params_frame, text="fast", foreground="#a3e635")
-            self.boundary_speed.grid(row=7, column=2, sticky='w', padx=(6,0))
-        except Exception:
-            self.boundary_speed = None
-        def _on_boundary_change(evt=None):
-            try:
-                b = self.vars['boundary'].get().strip().upper()
-                # Rough guidance: MUR fastest, PML_8 slower
-                speed = 'fast' if b.startswith('MUR') else 'slow'
-                if self.boundary_speed is not None:
-                    color = '#a3e635' if speed == 'fast' else '#f59e0b'
-                    self.boundary_speed.configure(text=speed, foreground=color)
-            except Exception:
-                pass
-        try:
-            boundary_combo.bind('<<ComboboxSelected>>', _on_boundary_change)
-        except Exception:
-            pass
-        # Initialize speed label once
-        try:
-            _on_boundary_change()
-        except Exception:
-            pass
 
         # Row 8: Theta/Phi sampling (for 3D)
         ttk.Label(params_frame, text="θ step (deg):").grid(row=8, column=0, sticky='w', pady=2)
@@ -1155,8 +1129,7 @@ class PlotFrame(ttk.Frame):
                 # Geometry radius uses normalized relative dB (0 dB at max) for a nice shape
                 patt_rel = patt_abs - np.nanmax(patt_abs)
                 R = np.maximum(0.01, 10**(patt_rel/20.0))
-                # Align viewer axes with openEMS convention: flip X for consistent handedness
-                X = -R * np.sin(TH) * np.cos(PH)
+                X = R * np.sin(TH) * np.cos(PH)
                 Y = R * np.sin(TH) * np.sin(PH)
                 Z = R * np.cos(TH)
                 fig_3d = Figure(figsize=(8, 6), facecolor='#2b2b2b')
@@ -1256,8 +1229,7 @@ class PlotFrame(ttk.Frame):
                 TH, PH = np.meshgrid(theta, phi_full, indexing='ij')
                 pattern_norm = pattern_3d - np.max(pattern_3d)
                 pattern_linear = np.maximum(0.01, 10**(pattern_norm/20))
-                # Align viewer axes with openEMS convention: flip X for consistent handedness
-                X = -pattern_linear * np.sin(TH) * np.cos(PH)
+                X = pattern_linear * np.sin(TH) * np.cos(PH)
                 Y = pattern_linear * np.sin(TH) * np.sin(PH)
                 Z = pattern_linear * np.cos(TH)
                 fig_3d = Figure(figsize=(8, 6), facecolor='#2b2b2b')
@@ -2647,17 +2619,6 @@ class AntennaSimulatorGUI:
             solver_type = self.param_frame.vars['solver_type'].get()
             is_microstrip = "Microstrip" in solver_type
             is_multi = getattr(self.plot_frame, 'mode', 'single') == 'multi'
-            # Normalize boundary selection to known values; map 'ABC' to 'MUR'
-            try:
-                boundary_ui = (self.param_frame.vars['boundary'].get() or '').strip().upper()
-            except Exception:
-                boundary_ui = 'MUR'
-            if boundary_ui.startswith('ABC'):
-                boundary_norm = 'MUR'
-            elif boundary_ui.startswith('PML'):
-                boundary_norm = 'PML_8'
-            else:
-                boundary_norm = 'MUR'
             
             # Import appropriate probe function
             if is_multi or is_microstrip:
@@ -2753,7 +2714,7 @@ class AntennaSimulatorGUI:
                 prepared = prepare_openems_microstrip_multi_3d(
                     patches,
                     dll_dir=dll_path,
-                    boundary=boundary_norm,
+                    boundary=self.param_frame.vars['boundary'].get(),
                     theta_step_deg=theta_step,
                     phi_step_deg=phi_step,
                     mesh_quality=mq,
@@ -2771,7 +2732,7 @@ class AntennaSimulatorGUI:
                             float(getattr(self.plot_frame.multi_panel, 'var_box_z', None).get()),
                         ) if (getattr(self.plot_frame.multi_panel, 'simbox_mode_combo', None) and getattr(self.plot_frame.multi_panel, 'simbox_mode_combo', None).get().lower().startswith('man')) else None
                     ),
-                    port_mode='auto',  # Use MSL when aligned; Lumped when rotated
+                    port_mode='lumped',  # Restore stable behavior: Lumped ports for all elements
                     verbose=1,
                     log_cb=_port_log_cb,
                 )
@@ -2789,7 +2750,7 @@ class AntennaSimulatorGUI:
                     self.current_params,
                     dll_dir=dll_path,
                     feed_direction=feed_direction,
-                    boundary=boundary_norm,
+                    boundary=self.param_frame.vars['boundary'].get(),
                     theta_step_deg=self.param_frame.vars['theta_step'].get(),
                     phi_step_deg=self.param_frame.vars['phi_step'].get() if solver_type == "Microstrip Fed (MSL Port, 3D)" else 5.0,
                     verbose=1
