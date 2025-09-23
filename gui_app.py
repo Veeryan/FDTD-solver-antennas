@@ -187,7 +187,7 @@ class ParameterFrame(ttk.Frame):
         
         # Row 7: Boundary type
         ttk.Label(params_frame, text="Boundary:").grid(row=7, column=0, sticky='w', pady=2)
-        self.vars['boundary'] = tk.StringVar(value="MUR")
+        self.vars['boundary'] = tk.StringVar(value="PML_8")
         boundary_combo = ttk.Combobox(params_frame, textvariable=self.vars['boundary'], width=12)
         # Provide supported boundary choices in openEMS
         boundary_combo['values'] = ["MUR", "PML_8"]
@@ -773,7 +773,8 @@ class PlotFrame(ttk.Frame):
         self.geometry_canvas = None
         self._geom_canvas = None
         self._geom_ax = None
-        # create MultiPatchPanel for controls/state (do not pack into Geometry tab)
+        # create MultiPatchPanel for controls/state (we'll use Legacy Matplotlib Geometry by default,
+        # but keep PyVista available in an external window for stability)
         try:
             from antenna_sim.multi_patch_designer import MultiPatchPanel
             self.multi_panel = MultiPatchPanel(self)
@@ -782,11 +783,11 @@ class PlotFrame(ttk.Frame):
                 self.multi_panel.right.grid_remove()
             except Exception:
                 pass
-            # Hook PyVista tab to mirror multi-panel changes
+            # Initialize the PyVista tab; it will choose external window by default (no embedded FBO)
             self._init_pv_tab()
-            # When main controls change, update PyVista and PV controls list
+            # When main controls change, mirror to PyVista if available
             def _on_multi_changed(patches):
-                # Update PyVista view
+                # Update PyVista view (if an external window is present)
                 try:
                     self._update_pv_view(patches)
                 except Exception:
@@ -948,7 +949,13 @@ class PlotFrame(ttk.Frame):
                     self.pv_view.set_display_options(show_substrate=show_sub, show_ground=show_gnd)
                 except Exception:
                     pass
-                self.pv_view.rebuild(patches)
+                # Pass horns as well if available
+                horns = []
+                try:
+                    horns = list(getattr(self.multi_panel, 'horns', []) or [])
+                except Exception:
+                    horns = []
+                self.pv_view.rebuild(patches, horns)
         except Exception:
             pass
 
@@ -1355,6 +1362,7 @@ class PyVistaMultiAntennaView(ttk.Frame):
         self._iren_widget = None
         self._camera_snapshot = None
         self._latest_patches = []
+        self._latest_horns = []
         self._pv_plotter = None
         self._plotter = None  # embedded BackgroundPlotter (Qt window reparented into Tk)
         # Dynamic origin axes state (actors)
@@ -1410,8 +1418,8 @@ class PyVistaMultiAntennaView(ttk.Frame):
             self.host.pack(fill='both', expand=True)
             self.update_idletasks()
 
-            # Default to embedded mode inside the Tk tab (previous behavior).
-            # You can force external window by setting environment variable PV_EMBED=0 before launch.
+            # Default to EMBEDDED mode for PyVista inside the Tk tab (Windows embedding path).
+            # Set PV_EMBED=0 to force external window.
             use_embedded = True
             try:
                 use_embedded = os.environ.get('PV_EMBED', '1') == '1'
@@ -1442,9 +1450,9 @@ class PyVistaMultiAntennaView(ttk.Frame):
                     self._plotter = self._ext_plotter
                     self.available = True
                     # If patches already queued, render them
-                    if self._latest_patches:
+                    if self._latest_patches or self._latest_horns:
                         try:
-                            self.rebuild(self._latest_patches)
+                            self.rebuild(self._latest_patches, self._latest_horns)
                         except Exception:
                             pass
                     return
@@ -1647,9 +1655,10 @@ class PyVistaMultiAntennaView(ttk.Frame):
                 self.available = True
                 # First render (even if empty) to draw axes and set camera
                 try:
-                    self.rebuild(self._latest_patches)
+                    self.rebuild(self._latest_patches, self._latest_horns)
                 except Exception:
                     pass
+
                 # Install camera callbacks to keep origin axes scaled with zoom
                 try:
                     self._install_camera_callbacks()
@@ -1715,14 +1724,15 @@ class PyVistaMultiAntennaView(ttk.Frame):
                     self._plotter.show()
                 except Exception:
                     pass
-            # Rebuild with latest patches
-            self.rebuild(self._latest_patches)
+            # Rebuild with latest patches/horns
+            self.rebuild(self._latest_patches, self._latest_horns)
         except Exception:
             pass
 
     def _pv_box(self, plotter, dims_xyz, center_world, angles_xyz_deg, color_rgb=(1,1,1), opacity=1.0, show_edges=False):
         try:
             import pyvista as pv
+
             # Build oriented box corners exactly like MultiPatchPanel
             W, L, H = float(dims_xyz[0]), float(dims_xyz[1]), float(dims_xyz[2])
             hx, hy, hz = W/2.0, L/2.0, H/2.0
@@ -1747,11 +1757,45 @@ class PyVistaMultiAntennaView(ttk.Frame):
         except Exception:
             pass
 
-    def _build_scene_pyvista(self, plotter, patches):
+    def _pv_horn(self, plotter, throat_a_m, throat_b_m, aperture_A_m, aperture_B_m, length_m, center_world, angles_xyz_deg,
+                 face_color=(0.72,0.45,0.20), face_opacity=0.22, edge_color=(1.0,0.83,0.30)):
+        """Render a simple pyramidal horn as 4 side quads plus edge lines."""
+        try:
+            import pyvista as pv
+            a, b = float(throat_a_m), float(throat_b_m)
+            A, B = float(aperture_A_m), float(aperture_B_m)
+            L = float(length_m)
+            cx, cy, cz = center_world
+            C = np.array([cx, cy, cz])
+            R = self._rot_matrix(*angles_xyz_deg)
+            z0, z1 = -L/2.0, +L/2.0
+            throat = np.array([[-a/2, -b/2, z0], [ a/2, -b/2, z0], [ a/2,  b/2, z0], [ -a/2,  b/2, z0]])
+            aperture = np.array([[-A/2, -B/2, z1], [ A/2, -B/2, z1], [ A/2,  B/2, z1], [ -A/2,  B/2, z1]])
+            th_w = (throat @ R) + C
+            ap_w = (aperture @ R) + C
+            # Build side faces as 4 quads
+            pts = np.vstack([th_w, ap_w])
+            # indices: 0..3 throat, 4..7 aperture
+            faces = np.hstack([
+                [4, 0,1,5,4],
+                [4, 1,2,6,5],
+                [4, 2,3,7,6],
+                [4, 3,0,4,7],
+            ]).astype(np.int64)
+            mesh = pv.PolyData(pts, faces)
+            try:
+                plotter.add_mesh(mesh, color=face_color, opacity=float(face_opacity), show_edges=True, edge_color=edge_color)
+            except Exception:
+                plotter.add_mesh(mesh, color=face_color, opacity=float(face_opacity), show_edges=True)
+        except Exception:
+            pass
+
+    def _build_scene_pyvista(self, plotter, patches, horns=None):
         try:
             plotter.clear()
         except Exception:
             pass
+
         # Ensure the small bottom-left axes actor is removed/disabled
         try:
             if hasattr(plotter, 'show_axes'):
@@ -1782,7 +1826,7 @@ class PyVistaMultiAntennaView(ttk.Frame):
             'y': {'mesh': None, 'actor': None},
             'z': {'mesh': None, 'actor': None},
         }
-        # Determine characteristic scene length from patches (used for axis scaling)
+        # Determine characteristic scene length from patches and horns (used for axis scaling)
         try:
             dims = []
             for inst in patches or []:
@@ -1792,12 +1836,15 @@ class PyVistaMultiAntennaView(ttk.Frame):
                     from antenna_sim.physics import design_patch_for_frequency
                     L_m, W_m, _ = design_patch_for_frequency(inst.params.frequency_hz, inst.params.eps_r, inst.params.h_m)
                     dims.append(max(L_m, W_m))
+            for h in (horns or []):
+                dims.append(max(float(h.params.aperture_A_m), float(h.params.aperture_B_m), float(h.params.length_m)))
             if dims:
                 self._scene_char_len = max(0.5, max(dims))
             else:
                 self._scene_char_len = 0.5
         except Exception:
             self._scene_char_len = 0.5
+
         color_sub = (0.23, 0.65, 0.43)
         color_gnd = (0.72, 0.45, 0.20)
         color_patch = (1.0, 0.83, 0.30)
@@ -1840,6 +1887,20 @@ class PyVistaMultiAntennaView(ttk.Frame):
                 self._pv_box(plotter, dims, feed_center, angles, color_rgb=color_feed, opacity=0.98, show_edges=False)
             except Exception:
                 pass
+        # Horns
+        for h in (horns or []):
+            try:
+                C = (float(h.center_x_m), float(h.center_y_m), float(h.center_z_m))
+                angles = (float(h.rot_x_deg), float(h.rot_y_deg), float(h.rot_z_deg))
+                self._pv_horn(plotter,
+                              float(h.params.throat_a_m), float(h.params.throat_b_m),
+                              float(h.params.aperture_A_m), float(h.params.aperture_B_m),
+                              float(h.params.length_m),
+                              C, angles,
+                              face_color=color_gnd, face_opacity=0.22, edge_color=color_patch)
+            except Exception:
+                pass
+
         try:
             plotter.reset_camera()
         except Exception:
@@ -1850,19 +1911,21 @@ class PyVistaMultiAntennaView(ttk.Frame):
         except Exception:
             pass
 
-    def rebuild(self, patches):
+    def rebuild(self, patches, horns=None):
         self._latest_patches = patches
+        self._latest_horns = list(horns or [])
         if not self.available or self._plotter is None:
             return
         # Save camera
         try:
             self._camera_snapshot = tuple(self._plotter.camera_position)
+
         except Exception:
             self._camera_snapshot = None
 
         # Build scene with PyVista
         try:
-            self._build_scene_pyvista(self._plotter, patches)
+            self._build_scene_pyvista(self._plotter, patches, self._latest_horns)
         except Exception:
             pass
 
@@ -2715,31 +2778,39 @@ class AntennaSimulatorGUI:
                 if not patches:
                     raise Exception("No antennas in Multi view. Add at least one patch before running FDTD.")
                 from antenna_sim.solver_fdtd_openems_microstrip_multi_3d import prepare_openems_microstrip_multi_3d
-                # Prefer theta/phi step from the multi panel if present
+                # Prefer theta/phi step and mesh quality from the Multi panel if present
                 try:
-                    theta_step = float(getattr(self.plot_frame.multi_panel, 'var_theta_step', None).get())
-                    phi_step = float(getattr(self.plot_frame.multi_panel, 'var_phi_step', None).get())
-                    # Mesh quality: parse combobox selection like "3 - Medium"
+                    theta_var = getattr(self.plot_frame.multi_panel, 'var_theta_step', None)
+                    phi_var = getattr(self.plot_frame.multi_panel, 'var_phi_step', None)
+                    theta_step = float(theta_var.get()) if theta_var else float(self.param_frame.vars['theta_step'].get())
+                    phi_step = float(phi_var.get()) if phi_var else float(self.param_frame.vars['phi_step'].get())
+                    # Mesh quality: parse combobox selection like "4 - Medium+"
                     mq = 3
-                    try:
-                        mq_sel = getattr(self.plot_frame.multi_panel, 'mesh_combo', None)
-                        if mq_sel is not None:
-                            sel_txt = mq_sel.get().strip()
-                            if sel_txt:
-                                mq = int(sel_txt.split('-',1)[0].strip())
-                    except Exception:
-                        mq = 3
+                    mq_sel = getattr(self.plot_frame.multi_panel, 'mesh_combo', None)
+                    if mq_sel is not None:
+                        sel_txt = mq_sel.get().strip()
+                        if sel_txt:
+                            mq = int(sel_txt.split('-', 1)[0].strip())
                 except Exception:
                     theta_step = self.param_frame.vars['theta_step'].get()
                     phi_step = self.param_frame.vars['phi_step'].get()
                     mq = 3
+                # Prefer boundary from the Multi panel if present
+                try:
+                    mp = getattr(self.plot_frame, 'multi_panel', None)
+                    if mp is not None and getattr(mp, 'boundary_combo', None) is not None:
+                        bc_ui_mp = (mp.boundary_combo.get() or '').strip().upper()
+                        boundary_norm = 'PML_8' if bc_ui_mp.startswith('PML') else 'MUR'
+                except Exception:
+                    pass
                 # Clear the bottom Port Diagnostics panel before preparing a new model
                 try:
                     if self.control_frame is not None:
                         self.root.after(0, self.control_frame.clear_port_log)
                 except Exception:
                     pass
-                # Define a log callback that appends to the bottom Port Diagnostics panel
+
+                # Define a log callback that appends messages to the bottom Port Diagnostics panel
                 def _port_log_cb(msg: str):
                     try:
                         if self.control_frame is not None:

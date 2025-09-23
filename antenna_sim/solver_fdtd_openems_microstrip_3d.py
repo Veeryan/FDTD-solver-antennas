@@ -156,8 +156,24 @@ def prepare_openems_microstrip_patch_3d(
         feed_metal.AddBox(priority=10, start=feed_start, stop=feed_stop)
         FDTD.AddEdges2Grid(dirs='xy', properties=feed_metal, metal_edge_res=mesh_res/2)
 
-        port = FDTD.AddMSLPort(1, feed_metal, port_start, port_stop, port_dir, 'z', excite=-1,
-                               FeedShift=10*mesh_res, MeasPlaneShift=feed_len/4, priority=5)
+        # Replace MSL port with a LumpedPort bridging ground (z=0) and patch (z=h) at the feed location
+        # Choose feed point at the patch edge center consistent with feed_direction
+        if feed_direction == FeedDirection.NEG_X:
+            feed_x, feed_y = -patch_W/2, 0.0
+        elif feed_direction == FeedDirection.POS_X:
+            feed_x, feed_y =  patch_W/2, 0.0
+        elif feed_direction == FeedDirection.NEG_Y:
+            feed_x, feed_y = 0.0, -patch_L/2
+        else:
+            feed_x, feed_y = 0.0,  patch_L/2
+        # Snap mesh lines at port coordinates
+        try:
+            mesh.AddLine('x', [float(feed_x)])
+            mesh.AddLine('y', [float(feed_y)])
+            mesh.AddLine('z', [0.0, float(h)])
+        except Exception:
+            pass
+        port = FDTD.AddLumpedPort(1, 50.0, [feed_x, feed_y, 0.0], [feed_x, feed_y, h], 'z', 1.0, priority=5, edges2grid='xy')
 
         mesh.SmoothMeshLines('all', mesh_res, 1.4)
         nf2ff = FDTD.CreateNF2FFBox()

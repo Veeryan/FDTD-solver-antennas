@@ -109,6 +109,7 @@ def prepare_openems_microstrip_multi_3d(
     manual_size_mm: Optional[tuple[float, float, float]] = None,
     feed_line_length_mm: float = 20.0,
     port_mode: str = "lumped",  # 'auto' | 'lumped'
+    end_criteria_db: float = -25.0,
     work_dir: str = "openems_out_multi",
     cleanup: bool = True,
     verbose: int = 0,
@@ -183,11 +184,18 @@ def prepare_openems_microstrip_multi_3d(
         # Simulation box sizing
         if (simbox_mode or "auto").lower().startswith('man') and manual_size_mm is not None:
             SimBox_X, SimBox_Y, SimBox_Z = manual_size_mm
+            cx = 0.5 * (x_min + x_max)
+            cy = 0.5 * (y_min + y_max)
+            cz = 0.5 * (z_min + z_max)
         else:
             mx, my, mz = auto_margin_mm
             SimBox_X = (x_max - x_min) + 2 * float(mx)
             SimBox_Y = (y_max - y_min) + 2 * float(my)
             SimBox_Z = (z_max - z_min) + 2 * float(mz)
+            # Center the sim box around the scene bounds center
+            cx = 0.5 * (x_min + x_max)
+            cy = 0.5 * (y_min + y_max)
+            cz = 0.5 * (z_min + z_max)
 
         def _log(msg: str):
             try:
@@ -204,10 +212,83 @@ def prepare_openems_microstrip_multi_3d(
         if verbose:
             _log(f"SimBox (mm): X={SimBox_X:.1f} Y={SimBox_Y:.1f} Z={SimBox_Z:.1f}")
 
+        # Determine mesh resolution (points-per-wavelength) and pick NrTS based on quality
+        try:
+            q = int(mesh_quality)
+        except Exception:
+            q = 3
+        q = max(1, min(10, q))
+        ppw_map = {
+            1: 12.0, 2: 16.0, 3: 20.0, 4: 25.0, 5: 32.0,
+            6: 40.0, 7: 50.0, 8: 65.0, 9: 80.0, 10: 100.0,
+        }
+        ppw = ppw_map.get(q, 20.0)
+        mesh_res = C0 / (f0 + fc) / unit / ppw
+
+        # Choose a larger max number of timesteps for finer meshes so the Gaussian excitation isn't truncated.
+        # This prevents the "Requested excitation pulse would be ... timesteps. Cutting to max number of timesteps!" warning
+        # and reduces the chance of hitting the max-timestep limit before the -40 dB end-criteria.
+        if q <= 5:
+            nr_ts = 30000
+        elif q == 6:
+            nr_ts = 50000
+        elif q == 7:
+            nr_ts = 70000
+        elif q == 8:
+            nr_ts = 100000
+        elif q == 9:
+            nr_ts = 130000
+        else:
+            nr_ts = 160000
+
+        # Additional bump for very thin copper: tiny thickness can enforce a very small dt
+        # Estimate excitation duration and dt to set a safer NrTS threshold even at modest mesh quality.
+        try:
+            # Excitation duration is approximately ~3.35/fc (empirical from openEMS logs)
+            exc_dur = 3.35 / fc  # seconds
+            # Estimate min spatial step from copper thickness or mesh_res (mm -> m)
+            min_dim_mm = None
+            try:
+                # Gather min copper thickness across all patches (as used)
+                t_list = []
+                for inst in patches:
+                    t_list.append(max(0.02, float(inst.params.metal.thickness_m) * 1e3))
+                if t_list:
+                    min_dim_mm = min(min(t_list), float(mesh_res))
+                else:
+                    min_dim_mm = float(mesh_res)
+            except Exception:
+                min_dim_mm = float(mesh_res)
+            min_dim_m = float(min_dim_mm) * 1e-3
+            # Courant-like dt estimate on conservative factor ~1.8
+            dt_est = min_dim_m / (C0 * 1.8)
+            exc_ts_est = max(10000, int(exc_dur / max(1e-15, dt_est)))
+            nr_ts = max(nr_ts, min(220000, int(2.2 * exc_ts_est)))
+            if verbose:
+                _log(f"NrTS adjusted for thin metal: min_dim≈{min_dim_mm:.4f} mm, exc_ts_est≈{exc_ts_est}, NrTS→{nr_ts}")
+        except Exception:
+            pass
+
+        if verbose:
+            _log(f"Mesh: q={q} -> ppw={ppw:g}, mesh_res={mesh_res:.3f} mm, NrTS={nr_ts}")
+
+        # Map end_criteria_db (dB) to linear EndCriteria for openEMS
+        try:
+            ec_db = float(end_criteria_db)
+        except Exception:
+            ec_db = -25.0
+        # Clamp to sane range
+        ec_db = max(-80.0, min(-10.0, ec_db))
+        ec_lin = 10.0**(ec_db/20.0)
+        if verbose:
+            _log(f"Termination: EndCriteria={ec_db:g} dB -> {ec_lin:.6g}")
+
         # openEMS setup
-        FDTD = openEMS(NrTS=30000, EndCriteria=1e-4)
+        FDTD = openEMS(NrTS=nr_ts, EndCriteria=ec_lin)
         FDTD.SetGaussExcite(f0, fc)
         bc = ['MUR'] * 6 if boundary.upper().startswith('MUR') else ['PML_8'] * 6
+        if verbose:
+            _log(f"Boundary: {bc[0]} on all sides")
         FDTD.SetBoundaryCond(bc)
 
         CSX = ContinuousStructure()
@@ -215,20 +296,32 @@ def prepare_openems_microstrip_multi_3d(
         mesh = CSX.GetGrid()
         mesh.SetDeltaUnit(unit)
 
-        # Base mesh lines (symmetric about origin to avoid bias)
-        mesh.AddLine('x', [-SimBox_X/2, SimBox_X/2])
-        mesh.AddLine('y', [-SimBox_Y/2, SimBox_Y/2])
-        mesh.AddLine('z', [-SimBox_Z/2, SimBox_Z/2])
+        # Base mesh lines centered on the scene bounds to ensure translated arrays are inside
+        mesh.AddLine('x', [cx - SimBox_X/2, cx + SimBox_X/2])
+        mesh.AddLine('y', [cy - SimBox_Y/2, cy + SimBox_Y/2])
+        mesh.AddLine('z', [cz - SimBox_Z/2, cz + SimBox_Z/2])
 
-        # Mesh resolution driven by quality level (points-per-wavelength)
-        try:
-            q = int(mesh_quality)
-        except Exception:
-            q = 3
-        q = max(1, min(5, q))
-        ppw_map = {1: 12.0, 2: 16.0, 3: 20.0, 4: 25.0, 5: 32.0}
-        ppw = ppw_map.get(q, 20.0)
-        mesh_res = C0 / (f0 + fc) / unit / ppw
+        # Mesh resolution already computed above into mesh_res
+
+        # Helper: add manual mesh planes spanning the bounding box of a rotated rectangle.
+        # This compensates for CSXCAD's limitation: edges2grid cannot operate when transforms are present
+        # and thin rotated metals may become "unused" if no grid plane intersects them.
+        def _add_mesh_bbox_for_plane(corners_world: np.ndarray, density: int = 9):
+            try:
+                arr = np.asarray(corners_world, dtype=float)
+                if arr.shape != (4, 3):
+                    return
+                nx = max(3, int(density))
+                ny = nx
+                nz = nx
+                xs = np.linspace(float(arr[:, 0].min()), float(arr[:, 0].max()), nx).tolist()
+                ys = np.linspace(float(arr[:, 1].min()), float(arr[:, 1].max()), ny).tolist()
+                zs = np.linspace(float(arr[:, 2].min()), float(arr[:, 2].max()), nz).tolist()
+                mesh.AddLine('x', xs)
+                mesh.AddLine('y', ys)
+                mesh.AddLine('z', zs)
+            except Exception:
+                pass
 
         # Shared theta/phi sampling
         theta = np.arange(0.0, 181.0, max(0.5, float(theta_step_deg)))
@@ -290,10 +383,18 @@ def prepare_openems_microstrip_multi_3d(
             if abs(ry) > 1e-9: gnd_box.AddTransform('RotateAxis', 'y', ry)
             if abs(rz) > 1e-9: gnd_box.AddTransform('RotateAxis', 'z', rz)
             gnd_box.AddTransform('Translate', T.tolist())
+            # Manual mesh refinement across the rotated ground plane bounding box
             try:
-                FDTD.AddEdges2Grid(dirs=plane_dirs, properties=m_gnd)
+                gnd_plane_local = [
+                    [-sub_W/2, -sub_L/2, -h_mm/2],
+                    [ sub_W/2, -sub_L/2, -h_mm/2],
+                    [ sub_W/2,  sub_L/2, -h_mm/2],
+                    [-sub_W/2,  sub_L/2, -h_mm/2],
+                ]
+                gnd_world = (np.asarray(gnd_plane_local, dtype=float) @ R) + T
+                _add_mesh_bbox_for_plane(gnd_world, density=6 + 2*int(q))
             except Exception:
-                FDTD.AddEdges2Grid(dirs='all', properties=m_gnd)
+                pass
 
             # Patch (thin metal) on local top face
             patch_box = m_patch.AddBox(priority=10, start=[-W_mm/2, -L_mm/2, h_mm/2 - t_cu_mm/2], stop=[W_mm/2, L_mm/2, h_mm/2 + t_cu_mm/2])
@@ -301,42 +402,58 @@ def prepare_openems_microstrip_multi_3d(
             if abs(ry) > 1e-9: patch_box.AddTransform('RotateAxis', 'y', ry)
             if abs(rz) > 1e-9: patch_box.AddTransform('RotateAxis', 'z', rz)
             patch_box.AddTransform('Translate', T.tolist())
+            # Manual mesh refinement across the rotated patch plane bounding box
             try:
-                FDTD.AddEdges2Grid(dirs=plane_dirs, properties=m_patch, metal_edge_res=mesh_res/2)
+                patch_plane_local = [
+                    [-W_mm/2, -L_mm/2,  h_mm/2],
+                    [ W_mm/2, -L_mm/2,  h_mm/2],
+                    [ W_mm/2,  L_mm/2,  h_mm/2],
+                    [-W_mm/2,  L_mm/2,  h_mm/2],
+                ]
+                patch_world = (np.asarray(patch_plane_local, dtype=float) @ R) + T
+                _add_mesh_bbox_for_plane(patch_world, density=6 + 2*int(q))
             except Exception:
-                FDTD.AddEdges2Grid(dirs='all', properties=m_patch, metal_edge_res=mesh_res/2)
+                pass
 
-            # Feed line on local top face
+            # Determine feed axis and feed point on the patch edge (local coords)
             if inst.feed_direction == FeedDirection.NEG_X:
-                feed_local_start = [-sub_W/2, -feed_w/2, h_mm/2 - t_cu_mm/2]
-                feed_local_stop  = [-W_mm/2,   feed_w/2, h_mm/2 + t_cu_mm/2]
                 feed_axis_local  = np.array([1.0, 0.0, 0.0])
                 feed_point_local = [-W_mm/2, 0.0, h_mm/2]
             elif inst.feed_direction == FeedDirection.POS_X:
-                feed_local_start = [ W_mm/2,  -feed_w/2, h_mm/2 - t_cu_mm/2]
-                feed_local_stop  = [ sub_W/2,  feed_w/2, h_mm/2 + t_cu_mm/2]
                 feed_axis_local  = np.array([1.0, 0.0, 0.0])
                 feed_point_local = [ W_mm/2, 0.0, h_mm/2]
             elif inst.feed_direction == FeedDirection.NEG_Y:
-                feed_local_start = [-feed_w/2, -sub_L/2, h_mm/2 - t_cu_mm/2]
-                feed_local_stop  = [ feed_w/2, -L_mm/2,  h_mm/2 + t_cu_mm/2]
                 feed_axis_local  = np.array([0.0, 1.0, 0.0])
                 feed_point_local = [0.0, -L_mm/2, h_mm/2]
             else:  # POS_Y
-                feed_local_start = [-feed_w/2,  L_mm/2,  h_mm/2 - t_cu_mm/2]
-                feed_local_stop  = [ feed_w/2,  sub_L/2, h_mm/2 + t_cu_mm/2]
                 feed_axis_local  = np.array([0.0, 1.0, 0.0])
                 feed_point_local = [0.0,  L_mm/2, h_mm/2]
 
-            feed_box = m_feed.AddBox(priority=10, start=feed_local_start, stop=feed_local_stop)
-            if abs(rx) > 1e-9: feed_box.AddTransform('RotateAxis', 'x', rx)
-            if abs(ry) > 1e-9: feed_box.AddTransform('RotateAxis', 'y', ry)
-            if abs(rz) > 1e-9: feed_box.AddTransform('RotateAxis', 'z', rz)
-            feed_box.AddTransform('Translate', T.tolist())
+            # For LumpedPort operation (current default), do NOT draw a long feed trace.
+            # Instead, place a small square feed pad on top of the patch near the feed point to localize currents.
             try:
-                FDTD.AddEdges2Grid(dirs=plane_dirs, properties=m_feed, metal_edge_res=mesh_res/2)
+                pad_w = max(1.0, float(feed_w))  # mm
             except Exception:
-                FDTD.AddEdges2Grid(dirs='all', properties=m_feed, metal_edge_res=mesh_res/2)
+                pad_w = 1.0
+            fx, fy = float(feed_point_local[0]), float(feed_point_local[1])
+            pad_start = [fx - pad_w/2, fy - pad_w/2, h_mm/2 - t_cu_mm/2]
+            pad_stop  = [fx + pad_w/2, fy + pad_w/2, h_mm/2 + t_cu_mm/2]
+            pad_box = m_feed.AddBox(priority=11, start=pad_start, stop=pad_stop)
+            if abs(rx) > 1e-9: pad_box.AddTransform('RotateAxis', 'x', rx)
+            if abs(ry) > 1e-9: pad_box.AddTransform('RotateAxis', 'y', ry)
+            if abs(rz) > 1e-9: pad_box.AddTransform('RotateAxis', 'z', rz)
+            pad_box.AddTransform('Translate', T.tolist())
+            try:
+                pad_plane_local = [
+                    [pad_start[0], pad_start[1], h_mm/2],
+                    [pad_stop[0],  pad_start[1], h_mm/2],
+                    [pad_stop[0],  pad_stop[1],  h_mm/2],
+                    [pad_start[0], pad_stop[1],  h_mm/2],
+                ]
+                pad_world = (np.asarray(pad_plane_local, dtype=float) @ R) + T
+                _add_mesh_bbox_for_plane(pad_world, density=8 + 2*int(q))
+            except Exception:
+                pass
 
             # Determine port strategy: MSL if axis-aligned; else Lumped
             # Compute world directions with rotation matrix
@@ -346,81 +463,13 @@ def prepare_openems_microstrip_multi_3d(
             feed_axis_world = feed_axis_world / max(1e-12, np.linalg.norm(feed_axis_world))
             aligned_normal = abs(normal_world[2]) >= 0.9999  # substrate normal ~ z
             aligned_feed = (abs(feed_axis_world[0]) >= 0.9999) or (abs(feed_axis_world[1]) >= 0.9999)
-            use_msl = (port_mode.lower() == 'auto') and (aligned_normal and aligned_feed)
+            # Temporarily disable MSL ports due to regression; always use LumpedPort
+            use_msl = False
             if verbose:
                 _log(f"Patch {idx}: center(mm)={np.round(T,3).tolist()} rot(deg)=(x={rx:g},y={ry:g},z={rz:g})")
                 _log(f"           normal_world={np.round(normal_world,6)} feed_axis_world={np.round(feed_axis_world,6)} port_mode={port_mode} -> port={'MSL' if use_msl else 'Lumped'}")
 
-            if use_msl:
-                # Reuse prior MSL local port definition: start at top into dielectric
-                if inst.feed_direction == FeedDirection.NEG_X:
-                    # local top (+h/2) to bottom (-h/2)
-                    port_local_start = [-sub_W/2, -feed_w/2, +h_mm/2]
-                    port_local_stop  = [-sub_W/2 + min(feed_line_length_mm, (sub_W - W_mm)/2), +feed_w/2, -h_mm/2]
-                elif inst.feed_direction == FeedDirection.POS_X:
-                    port_local_start = [ +sub_W/2, -feed_w/2, +h_mm/2]
-                    port_local_stop  = [ +sub_W/2 - min(feed_line_length_mm, (sub_W - W_mm)/2), +feed_w/2, -h_mm/2]
-                elif inst.feed_direction == FeedDirection.NEG_Y:
-                    port_local_start = [ -feed_w/2, -sub_L/2, +h_mm/2]
-                    port_local_stop  = [ +feed_w/2, -sub_L/2 + min(feed_line_length_mm, (sub_L - L_mm)/2), -h_mm/2]
-                else:
-                    port_local_start = [ -feed_w/2,  +sub_L/2, +h_mm/2]
-                    port_local_stop  = [ +feed_w/2,  +sub_L/2 - min(feed_line_length_mm, (sub_L - L_mm)/2), -h_mm/2]
-                # Choose global port_dir by world orientation of the feed axis
-                if abs(feed_axis_world[0]) >= 0.999:
-                    port_dir = 'x'
-                elif abs(feed_axis_world[1]) >= 0.999:
-                    port_dir = 'y'
-                else:
-                    # Should not happen due to use_msl gating; fallback to lumped behavior
-                    use_msl = False
-                    port_dir = 'x'
-                p_start = _transform_point_local_to_global(port_local_start, R, T)
-                p_stop  = _transform_point_local_to_global(port_local_stop,  R, T)
-                # Mesh refinement along propagation
-                try:
-                    if port_dir == 'x':
-                        x_min = min(p_start[0], p_stop[0]); x_max = max(p_start[0], p_stop[0])
-                        mesh.AddLine('x', np.linspace(x_min - max(1.0, feed_w), x_max + max(1.0, feed_w), 7))
-                    else:
-                        y_min = min(p_start[1], p_stop[1]); y_max = max(p_start[1], p_stop[1])
-                        mesh.AddLine('y', np.linspace(y_min - max(1.0, feed_w), y_max + max(1.0, feed_w), 7))
-                except Exception:
-                    pass
-                # Stable defaults: positive shifts independent of direction
-                feed_shift = float(10*mesh_res)
-                meas_shift = float(feed_line_length_mm/4)
-                if verbose:
-                    _log(f"           MSLPort[{idx}] dir={port_dir} start={np.round(p_start,2)} stop={np.round(p_stop,2)} excite=+1")
-                FDTD.AddMSLPort(idx, m_feed, p_start, p_stop, port_dir, 'z', excite=-1,
-                                FeedShift=feed_shift, MeasPlaneShift=meas_shift, priority=5)
-                # Diagnostics: check that the port lies across the substrate thickness and aligns with normal/feed axes
-                if verbose:
-                    try:
-                        # Top/bottom plane centers in world
-                        top_c  = _transform_point_local_to_global([0.0, 0.0, +h_mm/2], R, T)
-                        bot_c  = _transform_point_local_to_global([0.0, 0.0, -h_mm/2], R, T)
-                        v = np.array(p_stop) - np.array(p_start)
-                        v_n = v / max(1e-12, np.linalg.norm(v))
-                        nw = np.array(normal_world)
-                        nw_n = nw / max(1e-12, np.linalg.norm(nw))
-                        align = float(np.dot(v_n, -nw_n))  # expect ~+1 (top->bottom)
-                        # Signed distances of endpoints from the planes
-                        def plane_signed_dist(P, Pc, n):
-                            return float(np.dot(np.array(P) - np.array(Pc), n / max(1e-12, np.linalg.norm(n))))
-                        ds_top  = plane_signed_dist(p_start, top_c, nw)
-                        ds_bot  = plane_signed_dist(p_stop,  bot_c, nw)
-                        _log(f"           diag: v_norm·(-n)={align:.5f}  d(start,top)={ds_top:.5f}mm  d(stop,bot)={ds_bot:.5f}mm")
-                        # Feed axis vs port_dir
-                        if port_dir == 'x':
-                            pax = abs(feed_axis_world[0])
-                            _log(f"           diag: feed_axis_world.x={pax:.6f} (expect ~1)")
-                        else:
-                            pay = abs(feed_axis_world[1])
-                            _log(f"           diag: feed_axis_world.y={pay:.6f} (expect ~1)")
-                    except Exception:
-                        pass
-            else:
+            if not use_msl:
                 # Lumped port at feed location bridging patch to ground along nearest world axis
                 c_world = _transform_point_local_to_global(feed_point_local, R, T)
                 # Choose world axis most aligned with substrate normal
@@ -436,17 +485,23 @@ def prepare_openems_microstrip_multi_3d(
                 p_dir = axis
                 # Projected thickness along chosen axis; ensure span traverses full dielectric thickness
                 comp = float(abs(normal_world[axis])) if float(abs(normal_world[axis])) > 1e-6 else 1.0
-                # Use exact world coordinates of ground/patch planes along this axis for robust contact
-                ground_c = _transform_point_local_to_global([0.0, 0.0, -h_mm/2], R, T)
-                patch_c  = _transform_point_local_to_global([0.0, 0.0, +h_mm/2], R, T)
+                # Use exact world coordinates of ground/patch planes at the FEED x,y location
+                # This is crucial for rotated boards where plane z varies with x/y
+                try:
+                    fx, fy = float(feed_point_local[0]), float(feed_point_local[1])
+                except Exception:
+                    fx, fy = 0.0, 0.0
+                ground_c = _transform_point_local_to_global([fx, fy, -h_mm/2], R, T)
+                patch_c  = _transform_point_local_to_global([fx, fy, +h_mm/2], R, T)
                 eps = max(0.1, 0.25*mesh_res)  # small extension to ensure overlap with metal thickness
                 # Previous stable behavior: derive min/max span and order start->stop so vector aligns with +normal_world
                 axis_vals = sorted([ground_c[axis], patch_c[axis]])
                 axis_min = float(axis_vals[0] - eps)
                 axis_max = float(axis_vals[1] + eps)
-                # Slightly larger cross-section improves contact on coarse meshes when rotated
-                half_w = max(1.0, 0.75 * float(feed_w))
-                half_other = max(1.0, 0.75 * float(feed_w))
+                # Use a compact port cross-section for robustness on rotated boards
+                # Limit lateral span to a fraction of the mesh resolution to avoid spanning far along the rotated normal
+                half_w = max(0.4, min(0.6 * float(feed_w), 0.35 * float(mesh_res)))
+                half_other = half_w
                 sgn = 1.0 if float(normal_world[axis]) >= 0.0 else -1.0
                 if axis == 0:
                     s0, s1 = (axis_min, axis_max) if sgn >= 0 else (axis_max, axis_min)
@@ -495,8 +550,9 @@ def prepare_openems_microstrip_multi_3d(
                         # Distances of start/stop to ground/patch planes along the rotated normal
                         n = np.array(normal_world); n = n / max(1e-12, np.linalg.norm(n))
                         # Recompute centers used above
-                        ground_c = _transform_point_local_to_global([0.0, 0.0, -h_mm/2], R, T)
-                        patch_c  = _transform_point_local_to_global([0.0, 0.0, +h_mm/2], R, T)
+                        fx, fy = float(feed_point_local[0]), float(feed_point_local[1])
+                        ground_c = _transform_point_local_to_global([fx, fy, -h_mm/2], R, T)
+                        patch_c  = _transform_point_local_to_global([fx, fy, +h_mm/2], R, T)
                         d_start_ground = float(np.dot(np.array(start) - ground_c, n))
                         d_stop_patch   = float(np.dot(np.array(stop)  - patch_c,  n))
                         _log(f"           diag: axis_span={axis_span:.3f}mm lateral_span={lateral_span:.3f}mm axis_ratio={axis_ratio:.3f}")
@@ -587,6 +643,19 @@ def run_prepared_openems_microstrip_multi_3d(
 
         theta_rad = np.deg2rad(theta)
         phi_rad = np.deg2rad(phi)
+
+        # Diagnostics: report direction of maximum field (world coordinates)
+        try:
+            if E_arr.size:
+                t_idx, p_idx = np.unravel_index(int(np.argmax(E_arr)), E_arr.shape)
+                th = float(theta_rad[t_idx])
+                ph = float(phi_rad[p_idx])
+                x = math.sin(th) * math.cos(ph)
+                y = math.sin(th) * math.sin(ph)
+                z = math.cos(th)
+                print(f"NF2FF max at theta={math.degrees(th):.1f}°, phi={math.degrees(ph):.1f}°  dir≈[{x:.3f},{y:.3f},{z:.3f}]")
+        except Exception:
+            pass
 
         return OpenEMSResult(True, "Microstrip multi-3D pattern computed", theta=theta_rad, phi=phi_rad,
                               intensity=intensity_dB, sim_path=sim_path, is_dBi=True)

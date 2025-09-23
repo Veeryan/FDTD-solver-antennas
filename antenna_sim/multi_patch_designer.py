@@ -10,7 +10,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 from matplotlib.figure import Figure
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection, Line3DCollection
 
-from .models import PatchAntennaParams, Metal, metal_defaults
+from .models import PatchAntennaParams, HornAntennaParams, Metal, metal_defaults
 from .solver_fdtd_openems_microstrip import FeedDirection, calculate_microstrip_width
 from .physics import design_patch_for_frequency
 
@@ -28,6 +28,18 @@ class PatchInstance:
     rot_z_deg: float = 0.0  # rotation about global Z (degrees)
 
 
+@dataclass
+class HornInstance:
+    name: str
+    params: HornAntennaParams
+    center_x_m: float = 0.0
+    center_y_m: float = 0.0
+    center_z_m: float = 0.0
+    rot_x_deg: float = 0.0
+    rot_y_deg: float = 0.0
+    rot_z_deg: float = 0.0
+
+
 class MultiPatchPanel(ttk.Frame):
     """Embeddable panel for arranging multiple microstrip patch antennas.
 
@@ -39,7 +51,9 @@ class MultiPatchPanel(ttk.Frame):
     def __init__(self, parent: tk.Misc):
         super().__init__(parent)
         self.patches: List[PatchInstance] = []
+        self.horns: List[HornInstance] = []
         self._current_index: Optional[int] = None
+        self._current_kind: Optional[str] = None  # 'patch' or 'horn'
         self._change_cb = None  # external listener for scene updates
         # Track UI widgets for enable/disable and overlay
         self._control_widgets: List[tk.Widget] = []
@@ -91,13 +105,23 @@ class MultiPatchPanel(ttk.Frame):
 
         # ---- Geometry tab ----
         ttk.Label(tab_controls, text="Geometry Controls", font=("Segoe UI", 12, "bold")).pack(fill='x', padx=10, pady=(12, 6))
-        btn_add = ttk.Button(tab_controls, text="Add Patch Antenna", command=self._on_add_patch)
+        # Antenna type toggle
+        type_row = ttk.Frame(tab_controls)
+        type_row.pack(fill='x', padx=10, pady=(0,6))
+        ttk.Label(type_row, text="Antenna Type:").pack(side='left')
+        self.var_add_type = tk.StringVar(value='patch')
+        btn_type_patch = ttk.Radiobutton(type_row, text="Patch", variable=self.var_add_type, value='patch', command=self._on_type_changed)
+        btn_type_patch.pack(side='left', padx=(8,4))
+        btn_type_horn = ttk.Radiobutton(type_row, text="Horn", variable=self.var_add_type, value='horn', command=self._on_type_changed)
+        btn_type_horn.pack(side='left', padx=(4,0))
+        # Add Antenna button
+        btn_add = ttk.Button(tab_controls, text="Add Antenna", command=self._on_add_antenna)
         btn_add.pack(fill='x', padx=10, pady=(0, 10))
         self._control_widgets.append(btn_add)
 
         sel = ttk.Frame(tab_controls)
         sel.pack(fill='x', padx=10, pady=(0, 10))
-        ttk.Label(sel, text="Select Patch:").grid(row=0, column=0, sticky='w')
+        ttk.Label(sel, text="Select Antenna:").grid(row=0, column=0, sticky='w')
         self.sel_var = tk.StringVar()
         # Strictly dropdown-only (no free text)
         self.sel_combo = ttk.Combobox(sel, textvariable=self.sel_var, state='readonly')
@@ -110,6 +134,7 @@ class MultiPatchPanel(ttk.Frame):
 
         props = ttk.LabelFrame(tab_controls, text="Selected Patch Properties")
         props.pack(fill='x', padx=10, pady=(0, 10))
+        self.patch_frame = props
         try:
             props.columnconfigure(1, weight=1)
         except Exception:
@@ -122,6 +147,7 @@ class MultiPatchPanel(ttk.Frame):
         self.var_h = tk.DoubleVar(value=1.6)
         self.var_loss = tk.DoubleVar(value=0.02)
         self.var_metal = tk.StringVar(value=Metal.COPPER.value)
+        self.var_metal_t_um = tk.DoubleVar(value=35.0)
         # Rotation (deg) about global axes
         self.var_rx = tk.DoubleVar(value=0.0)
         self.var_ry = tk.DoubleVar(value=0.0)
@@ -160,6 +186,7 @@ class MultiPatchPanel(ttk.Frame):
         mk_row("Substrate h (mm)", self.var_h, 'h')
         mk_row("Loss tangent", self.var_loss, 'loss')
         self.metal_combo = mk_row("Metal", self.var_metal, 'metal', is_combo=True)
+        mk_row("Metal thickness (µm)", self.var_metal_t_um, 'metal_thickness')
         mk_row("Center Z (m)", self.var_cz, 'cz')
         mk_row("Rotate X (°)", self.var_rx, 'rx')
         mk_row("Rotate Y (°)", self.var_ry, 'ry')
@@ -179,6 +206,64 @@ class MultiPatchPanel(ttk.Frame):
         btn_feed.grid(row=r, column=2, padx=(6,0))
         self._control_widgets.append(btn_feed)
         r += 1
+
+        # Horn properties (shown when a horn is selected)
+        self.horn_frame = ttk.LabelFrame(tab_controls, text="Selected Horn Properties")
+        self.horn_frame.pack(fill='x', padx=10, pady=(0, 10))
+        try:
+            self.horn_frame.columnconfigure(1, weight=1)
+        except Exception:
+            pass
+        # Create horn-specific vars
+        self.hvar_freq = tk.DoubleVar(value=2.45)
+        self.hvar_throat_a = tk.DoubleVar(value=22.86)  # mm default like WR-90
+        self.hvar_throat_b = tk.DoubleVar(value=10.16)
+        self.hvar_ap_A = tk.DoubleVar(value=100.0)
+        self.hvar_ap_B = tk.DoubleVar(value=60.0)
+        self.hvar_len = tk.DoubleVar(value=120.0)
+        self.hvar_metal = tk.StringVar(value=Metal.COPPER.value)
+
+        hr = 0
+        def hmk(lbl, var, key, is_combo=False):
+            nonlocal hr
+            ttk.Label(self.horn_frame, text=lbl).grid(row=hr, column=0, sticky='w')
+            if not is_combo:
+                e = ttk.Entry(self.horn_frame, textvariable=var, width=12)
+                e.grid(row=hr, column=1, sticky='ew')
+                try:
+                    e.bind('<Return>', lambda ev, k=key: self._apply_single_field(k))
+                except Exception:
+                    pass
+                self._control_widgets.append(e)
+                self._original_states[e] = 'normal'
+            else:
+                e = ttk.Combobox(self.horn_frame, textvariable=var, state='readonly', values=[m.value for m in Metal])
+                e.grid(row=hr, column=1, sticky='ew')
+                try:
+                    e.bind('<<ComboboxSelected>>', lambda ev, k=key: self._apply_single_field(k))
+                except Exception:
+                    pass
+                self._control_widgets.append(e)
+                self._original_states[e] = 'readonly'
+            btn = ttk.Button(self.horn_frame, text='Set', width=6, command=lambda k=key: self._apply_single_field(k))
+            btn.grid(row=hr, column=2, padx=(6,0))
+            self._control_widgets.append(btn)
+            hr += 1
+            return e
+
+        hmk("Frequency (GHz)", self.hvar_freq, 'h_freq')
+        hmk("Throat a (mm)", self.hvar_throat_a, 'h_throat_a')
+        hmk("Throat b (mm)", self.hvar_throat_b, 'h_throat_b')
+        hmk("Aperture A (mm)", self.hvar_ap_A, 'h_ap_A')
+        hmk("Aperture B (mm)", self.hvar_ap_B, 'h_ap_B')
+        hmk("Length L (mm)", self.hvar_len, 'h_len')
+        hmk("Metal", self.hvar_metal, 'h_metal', is_combo=True)
+        # Reuse common transform fields from patch props for horns (center/rotate already exist)
+        # Show patch props by default; horn frame hidden until horn selected
+        try:
+            self.horn_frame.pack_forget()
+        except Exception:
+            pass
 
         # Display controls
         disp = ttk.LabelFrame(tab_controls, text="Display")
@@ -226,13 +311,24 @@ class MultiPatchPanel(ttk.Frame):
         mesh_frame = ttk.LabelFrame(tab_sim, text="Mesh Quality")
         mesh_frame.pack(fill='x', padx=10, pady=(0, 10))
         ttk.Label(mesh_frame, text="Resolution").grid(row=0, column=0, sticky='w')
-        self.var_mesh_quality = tk.IntVar(value=3)
+        self.var_mesh_quality = tk.IntVar(value=4)
         self.mesh_combo = ttk.Combobox(mesh_frame, state='readonly', width=18,
-                                       values=["1 - Coarse","2 - Medium-","3 - Medium","4 - Medium+","5 - Fine"])
+                                       values=[
+                                           "1 - Coarse",
+                                           "2 - Medium-",
+                                           "3 - Medium",
+                                           "4 - Medium+",
+                                           "5 - Fine",
+                                           "6 - Fine+",
+                                           "7 - Very fine",
+                                           "8 - Ultra fine",
+                                           "9 - Extreme",
+                                           "10 - Max",
+                                       ])
         self.mesh_combo.grid(row=0, column=1, sticky='ew')
         # Set to default index 2 (value 3)
         try:
-            self.mesh_combo.current(2)
+            self.mesh_combo.current(3)
         except Exception:
             pass
         try:
@@ -245,13 +341,13 @@ class MultiPatchPanel(ttk.Frame):
         try:
             self._prev_theta_step = float(self.var_theta_step.get())
             self._prev_phi_step = float(self.var_phi_step.get())
-            self._prev_mesh_quality = 3
+            self._prev_mesh_quality = 4
         except Exception:
             self._prev_theta_step = None
             self._prev_phi_step = None
             self._prev_mesh_quality = None
         # Previous NF2FF center and sim box state
-        self._prev_nf_center = 'Origin'
+        self._prev_nf_center = 'Centroid'
         self._prev_simbox_mode = 'Auto'
         self._prev_margin_x = 80.0
         self._prev_margin_y = 80.0
@@ -259,12 +355,33 @@ class MultiPatchPanel(ttk.Frame):
         self._prev_box_x = 400.0
         self._prev_box_y = 400.0
         self._prev_box_z = 160.0
+        # Boundary state for change reporting
+        self._prev_boundary = 'PML_8'
+
+        # Termination controls
+        term_frame = ttk.LabelFrame(tab_sim, text="Termination")
+        term_frame.pack(fill='x', padx=10, pady=(0, 10))
+        ttk.Label(term_frame, text="End Criteria (dB)").grid(row=0, column=0, sticky='w')
+        self.var_end_criteria_db = tk.DoubleVar(value=-25.0)
+        e_end = ttk.Entry(term_frame, textvariable=self.var_end_criteria_db, width=10)
+        e_end.grid(row=0, column=1, sticky='ew')
+        try:
+            e_end.bind('<Return>', lambda ev: self._apply_sim_params())
+        except Exception:
+            pass
+        self._control_widgets.append(e_end)
+        self._original_states[e_end] = 'normal'
+        # Track previous end criteria for change reporting
+        try:
+            self._prev_end_criteria_db = float(self.var_end_criteria_db.get())
+        except Exception:
+            self._prev_end_criteria_db = -25.0
 
         # NF2FF center control
         nf_frame = ttk.LabelFrame(tab_sim, text="NF2FF Center")
         nf_frame.pack(fill='x', padx=10, pady=(0, 10))
         ttk.Label(nf_frame, text="Center").grid(row=0, column=0, sticky='w')
-        self.var_nf2ff_center = tk.StringVar(value='Origin')
+        self.var_nf2ff_center = tk.StringVar(value='Centroid')
         self.nf_center_combo = ttk.Combobox(nf_frame, textvariable=self.var_nf2ff_center, state='readonly',
                                             values=['Origin','Centroid'])
         self.nf_center_combo.grid(row=0, column=1, sticky='ew')
@@ -274,6 +391,21 @@ class MultiPatchPanel(ttk.Frame):
             pass
         self._control_widgets.append(self.nf_center_combo)
         self._original_states[self.nf_center_combo] = 'readonly'
+
+        # Boundary control (explicit in Multi panel)
+        bc_frame = ttk.LabelFrame(tab_sim, text="Boundary Condition")
+        bc_frame.pack(fill='x', padx=10, pady=(0, 10))
+        ttk.Label(bc_frame, text="Boundary").grid(row=0, column=0, sticky='w')
+        self.var_boundary = tk.StringVar(value='PML_8')
+        self.boundary_combo = ttk.Combobox(bc_frame, textvariable=self.var_boundary, state='readonly',
+                                           values=['MUR','PML_8'])
+        self.boundary_combo.grid(row=0, column=1, sticky='ew')
+        try:
+            self.boundary_combo.bind('<<ComboboxSelected>>', lambda ev: self._apply_sim_params())
+        except Exception:
+            pass
+        self._control_widgets.append(self.boundary_combo)
+        self._original_states[self.boundary_combo] = 'readonly'
 
         # Simulation Box controls
         box_frame = ttk.LabelFrame(tab_sim, text="Simulation Box")
@@ -482,6 +614,12 @@ class MultiPatchPanel(ttk.Frame):
         self._init_axes(limits)
         for p in self.patches:
             self._draw_patch(p)
+        # Draw horns after patches
+        try:
+            for h in self.horns:
+                self._draw_horn(h)
+        except Exception:
+            pass
         # Restore view if available
         try:
             if elev is not None and azim is not None:
@@ -601,9 +739,13 @@ class MultiPatchPanel(ttk.Frame):
             W_m = inst.params.patch_width_m
         else:
             L_m, W_m, _ = design_patch_for_frequency(inst.params.frequency_hz, inst.params.eps_r, inst.params.h_m)
-        # Visual thicknesses
-        t_patch = max(35e-6, 0.5e-4)  # ~35um copper default
-        t_ground = 35e-6
+        # Visual thicknesses (use specified metal thickness with a minimum so it's visible)
+        try:
+            t_metal = float(getattr(inst.params.metal, 'thickness_m', 35e-6))
+        except Exception:
+            t_metal = 35e-6
+        t_patch = max(t_metal, 0.5e-4)  # at least 50 µm to render reliably
+        t_ground = t_metal
         h = inst.params.h_m
         cx, cy, cz = inst.center_x_m, inst.center_y_m, inst.center_z_m
         C = np.array([cx, cy, cz])
@@ -695,50 +837,148 @@ class MultiPatchPanel(ttk.Frame):
         # Center marker
         self.ax.plot([cx], [cy], [cz], marker='o', color='#ff4081', markersize=4)
 
-    def _fit_view(self):
-        """Adjust axes limits to enclose all patches with a small margin, preserving camera orientation."""
+    def _draw_horn(self, inst: HornInstance):
+        """Draw a simple pyramidal horn wireframe and semi-transparent sides.
+        Local horn axis is +Z from throat to aperture, object centered at (0,0,0)."""
         try:
-            if not self.patches:
-                self._init_axes()
-                self.canvas.draw_idle()
-                return
-            xs, ys, zs = [], [], []
-            for inst in self.patches:
-                # Geometry parameters
-                if inst.params.patch_length_m and inst.params.patch_width_m:
-                    L_m = inst.params.patch_length_m; W_m = inst.params.patch_width_m
-                else:
-                    L_m, W_m, _ = design_patch_for_frequency(inst.params.frequency_hz, inst.params.eps_r, inst.params.h_m)
-                t_patch = max(35e-6, 0.5e-4)
-                t_ground = 35e-6
-                h = inst.params.h_m
-                C = np.array([inst.center_x_m, inst.center_y_m, inst.center_z_m])
-                R = self._rotation_matrix(inst.rot_x_deg, inst.rot_y_deg, inst.rot_z_deg)
-                margin = 0.35 * max(L_m, W_m)
-                sub_L = L_m + 2*margin
-                sub_W = W_m + 2*margin
-                visual_gap = max(8e-4, 0.01 * max(L_m, W_m))
-                # Include patch, substrate, and ground boxes
-                sub_center = C + (np.array([0,0,-(t_patch/2 + visual_gap + h/2)]) @ R)
-                gnd_center = C + (np.array([0,0,-(t_patch/2 + visual_gap + h + t_ground/2)]) @ R)
-                for (ctr, W, L, H) in [
-                    (C, W_m, L_m, t_patch),
-                    (sub_center, sub_W, sub_L, h),
-                    (gnd_center, sub_W, sub_L, t_ground),
-                ]:
-                    corners = self._box_corners(ctr, W, L, H, R)
-                    xs.extend(corners[:,0]); ys.extend(corners[:,1]); zs.extend(corners[:,2])
-            # Compute limits with padding
-            x_min, x_max = min(xs), max(xs)
-            y_min, y_max = min(ys), max(ys)
-            z_min, z_max = min(zs), max(zs)
-            pad = 0.08 * max(x_max-x_min, y_max-y_min, z_max-z_min)
-            xlim = (x_min - pad, x_max + pad)
-            ylim = (y_min - pad, y_max + pad)
-            zlim = (z_min - pad, z_max + pad)
+            a, b = float(inst.params.throat_a_m), float(inst.params.throat_b_m)
+            A, B = float(inst.params.aperture_A_m), float(inst.params.aperture_B_m)
+            L = float(inst.params.length_m)
+            C = np.array([inst.center_x_m, inst.center_y_m, inst.center_z_m])
+            R = self._rotation_matrix(inst.rot_x_deg, inst.rot_y_deg, inst.rot_z_deg)
+            # Throat at z=-L/2, aperture at z=+L/2
+            z0, z1 = -L/2.0, +L/2.0
+            throat = np.array([
+                [-a/2, -b/2, z0],
+                [ a/2, -b/2, z0],
+                [ a/2,  b/2, z0],
+                [-a/2,  b/2, z0],
+            ])
+            aperture = np.array([
+                [-A/2, -B/2, z1],
+                [ A/2, -B/2, z1],
+                [ A/2,  B/2, z1],
+                [-A/2,  B/2, z1],
+            ])
+            th_w = (throat @ R) + C
+            ap_w = (aperture @ R) + C
+            # Build edges
+            edges = []
+            # throat ring
+            for i in range(4):
+                edges.append([th_w[i].tolist(), th_w[(i+1)%4].tolist()])
+            # aperture ring
+            for i in range(4):
+                edges.append([ap_w[i].tolist(), ap_w[(i+1)%4].tolist()])
+            # 4 radial edges
+            for i in range(4):
+                edges.append([th_w[i].tolist(), ap_w[i].tolist()])
+            lc = Line3DCollection(edges, colors='#ffd24d', linewidths=1.4)
+            try:
+                lc.set_zorder(95)
+            except Exception:
+                pass
+            self.ax.add_collection3d(lc)
+            # Side faces (semi-transparent coppery)
+            faces = []
+            for i in range(4):
+                faces.append([th_w[i].tolist(), th_w[(i+1)%4].tolist(), ap_w[(i+1)%4].tolist(), ap_w[i].tolist()])
+            poly = Poly3DCollection(faces, alpha=0.18, facecolor='#b87333', edgecolor='none')
+            try:
+                poly.set_zsort('min')
+            except Exception:
+                pass
+            self.ax.add_collection3d(poly)
+            # Center marker
+            self.ax.plot([C[0]],[C[1]],[C[2]], marker='o', color='#ff4081', markersize=4)
+        except Exception:
+            pass
+
+    def _fit_view(self):
+        """Auto-frame the view to include all patches and horns with padding."""
+        try:
             # Preserve camera orientation
             elev = getattr(self.ax, 'elev', None)
             azim = getattr(self.ax, 'azim', None)
+            # Accumulate bounds
+            x_min = y_min = z_min = float('inf')
+            x_max = y_max = z_max = float('-inf')
+
+            # Helper to expand bounds from an (N,3) array
+            def expand_bounds(pts: np.ndarray):
+                nonlocal x_min, y_min, z_min, x_max, y_max, z_max
+                if pts.size == 0:
+                    return
+                x_min = min(x_min, float(np.min(pts[:,0])))
+                y_min = min(y_min, float(np.min(pts[:,1])))
+                z_min = min(z_min, float(np.min(pts[:,2])))
+                x_max = max(x_max, float(np.max(pts[:,0])))
+                y_max = max(y_max, float(np.max(pts[:,1])))
+                z_max = max(z_max, float(np.max(pts[:,2])))
+
+            # Collect patch bounds (use substrate box which is the largest footprint)
+            for inst in self.patches:
+                try:
+                    # Determine patch dimensions
+                    if inst.params.patch_length_m and inst.params.patch_width_m:
+                        L_m = inst.params.patch_length_m
+                        W_m = inst.params.patch_width_m
+                    else:
+                        L_m, W_m, _ = design_patch_for_frequency(inst.params.frequency_hz, inst.params.eps_r, inst.params.h_m)
+                    t_patch = max(35e-6, 0.5e-4)
+                    h = inst.params.h_m
+                    C = np.array([inst.center_x_m, inst.center_y_m, inst.center_z_m])
+                    R = self._rotation_matrix(inst.rot_x_deg, inst.rot_y_deg, inst.rot_z_deg)
+                    margin = 0.35 * max(L_m, W_m)
+                    sub_L = L_m + 2*margin
+                    sub_W = W_m + 2*margin
+                    # Substrate center (visual gap ignored for bounds simplicity)
+                    sub_center = C + (np.array([0,0,-(t_patch/2 + h/2)]) @ R)
+                    corners = self._box_corners(sub_center, sub_W, sub_L, h, R)
+                    expand_bounds(corners)
+                except Exception:
+                    pass
+
+            # Collect horn bounds using throat/aperture rectangles
+            for inst in self.horns:
+                try:
+                    a = float(inst.params.throat_a_m); b = float(inst.params.throat_b_m)
+                    A = float(inst.params.aperture_A_m); B = float(inst.params.aperture_B_m)
+                    L = float(inst.params.length_m)
+                    C = np.array([inst.center_x_m, inst.center_y_m, inst.center_z_m])
+                    R = self._rotation_matrix(inst.rot_x_deg, inst.rot_y_deg, inst.rot_z_deg)
+                    z0, z1 = -L/2.0, +L/2.0
+                    throat = np.array([[-a/2, -b/2, z0], [ a/2, -b/2, z0], [ a/2,  b/2, z0], [ -a/2,  b/2, z0]])
+                    aperture = np.array([[-A/2, -B/2, z1], [ A/2, -B/2, z1], [ A/2,  B/2, z1], [ -A/2,  B/2, z1]])
+                    th_w = (throat @ R) + C
+                    ap_w = (aperture @ R) + C
+                    expand_bounds(th_w)
+                    expand_bounds(ap_w)
+                except Exception:
+                    pass
+
+            # If nothing present, reset to default axes
+            if not self.patches and not self.horns:
+                self._init_axes(None)
+                try:
+                    if elev is not None and azim is not None:
+                        self.ax.view_init(elev=elev, azim=azim)
+                except Exception:
+                    pass
+                self.canvas.draw_idle()
+                return
+
+            # Compute padded limits
+            x_span = max(1e-6, x_max - x_min)
+            y_span = max(1e-6, y_max - y_min)
+            z_span = max(1e-6, z_max - z_min)
+            span = max(x_span, y_span, z_span)
+            pad = 0.12 * span
+            xlim = (x_min - pad, x_max + pad)
+            ylim = (y_min - pad, y_max + pad)
+            zlim = (z_min - pad, z_max + pad)
+
+            # Apply limits and restore camera orientation
             self.ax.set_xlim(xlim); self.ax.set_ylim(ylim); self.ax.set_zlim(zlim)
             try:
                 if elev is not None and azim is not None:
@@ -748,7 +988,6 @@ class MultiPatchPanel(ttk.Frame):
             self.canvas.draw_idle()
             # Notify listeners so external views (e.g., PyVista) can also reset their camera
             try:
-                # Mark last action for host to detect a Fit View request
                 self._last_action = 'fit'
                 if self._change_cb is not None:
                     self._change_cb(self.patches)
@@ -775,12 +1014,20 @@ class MultiPatchPanel(ttk.Frame):
         try:
             # Create params from current fields
             metal_enum = Metal(self.var_metal.get())
+            try:
+                t_um = float(self.var_metal_t_um.get())
+            except Exception:
+                t_um = 35.0
+            t_m = max(1e-7, float(t_um) * 1e-6)
+            # Copy base metal and apply user thickness
+            metal_props = metal_defaults[metal_enum].model_copy(deep=True)
+            metal_props.thickness_m = t_m
             p = PatchAntennaParams(
                 frequency_hz=float(self.var_freq.get())*1e9,
                 eps_r=float(self.var_eps.get()),
                 h_m=float(self.var_h.get())*1e-3,
                 loss_tangent=float(self.var_loss.get()),
-                metal=metal_defaults[metal_enum],
+                metal=metal_props,
                 patch_length_m=None,
                 patch_width_m=None,
             )
@@ -791,58 +1038,183 @@ class MultiPatchPanel(ttk.Frame):
                 fd = FeedDirection.NEG_X
             inst = PatchInstance(name=name, params=p, center_x_m=0.0, center_y_m=0.0, center_z_m=0.0, feed_direction=fd)
             self.patches.append(inst)
-            self._refresh_selector(select_index=len(self.patches)-1)
+            # Select the newly added patch by name
+            self._refresh_selector(select_name=name)
             self._draw_scene()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to add patch: {e}")
 
-    def _refresh_selector(self, select_index: Optional[int] = None):
-        names = [p.name for p in self.patches]
+    def _on_add_antenna(self):
+        """Add antenna based on the selected type toggle."""
+        try:
+            typ = (self.var_add_type.get() or 'patch').strip().lower()
+        except Exception:
+            typ = 'patch'
+        if typ == 'patch':
+            return self._on_add_patch()
+        # Add horn
+        try:
+            metal_enum = Metal(self.hvar_metal.get())
+        except Exception:
+            metal_enum = Metal.COPPER
+        try:
+            params = HornAntennaParams(
+                frequency_hz=float(self.hvar_freq.get())*1e9,
+                throat_a_m=float(self.hvar_throat_a.get())*1e-3,
+                throat_b_m=float(self.hvar_throat_b.get())*1e-3,
+                aperture_A_m=float(self.hvar_ap_A.get())*1e-3,
+                aperture_B_m=float(self.hvar_ap_B.get())*1e-3,
+                length_m=float(self.hvar_len.get())*1e-3,
+                metal=metal_defaults[metal_enum],
+            )
+            name = f"Horn {len(self.horns)+1}"
+            inst = HornInstance(name=name, params=params, center_x_m=0.0, center_y_m=0.0, center_z_m=0.0)
+            self.horns.append(inst)
+            # Select new horn by name
+            self._refresh_selector(select_name=name)
+            self._draw_scene()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to add horn: {e}")
+
+    def _on_type_changed(self):
+        """Toggle visible property panels when user switches type toggle."""
+        try:
+            t = (self.var_add_type.get() or 'patch').strip().lower()
+        except Exception:
+            t = 'patch'
+        try:
+            if t == 'horn':
+                if getattr(self, 'patch_frame', None) is not None:
+                    self.patch_frame.pack_forget()
+                self.horn_frame.pack(fill='x', padx=10, pady=(0,10))
+            else:
+                self.horn_frame.pack_forget()
+                if getattr(self, 'patch_frame', None) is not None:
+                    self.patch_frame.pack(fill='x', padx=10, pady=(0,10))
+        except Exception:
+            pass
+
+    def _refresh_selector(self, select_index: Optional[int] = None, select_name: Optional[str] = None):
+        names_p = [p.name for p in self.patches]
+        names_h = [h.name for h in self.horns]
+        names = names_p + names_h
         self.sel_combo['values'] = names
         if names:
-            idx = select_index if select_index is not None else 0
-            idx = max(0, min(idx, len(names)-1))
-            self.sel_combo.current(idx)
-            self._current_index = idx
-            self._load_current_into_fields()
+            if select_name is not None and select_name in names:
+                idx = names.index(select_name)
+            else:
+                idx = select_index if select_index is not None else 0
+                idx = max(0, min(idx, len(names)-1))
+            try:
+                self.sel_combo.current(idx)
+                self.sel_var.set(names[idx])
+            except Exception:
+                try:
+                    self.sel_combo.set(names[idx])
+                except Exception:
+                    pass
+            # delegate to selection handler to set _current_kind/_current_index and load fields
+            self._on_select_patch()
         else:
-            self.sel_combo.set('')
+            try:
+                self.sel_combo.set('')
+            except Exception:
+                pass
             self._current_index = None
+            self._current_kind = None
 
     def _on_select_patch(self, event=None):
         name = self.sel_var.get()
+        # Try patches first
+        found = False
         for i, p in enumerate(self.patches):
             if p.name == name:
                 self._current_index = i
+                self._current_kind = 'patch'
                 self._load_current_into_fields()
+                found = True
                 break
+        if not found:
+            for i, h in enumerate(self.horns):
+                if h.name == name:
+                    self._current_index = i
+                    self._current_kind = 'horn'
+                    self._load_current_into_fields()
+                    found = True
+                    break
 
     def _load_current_into_fields(self):
         if self._current_index is None:
             return
-        p = self.patches[self._current_index]
-        self.var_cx.set(p.center_x_m)
-        self.var_cy.set(p.center_y_m)
-        self.var_freq.set(p.params.frequency_hz/1e9)
-        self.var_eps.set(p.params.eps_r)
-        self.var_h.set(p.params.h_m*1e3)
-        self.var_loss.set(p.params.loss_tangent)
-        self.var_cz.set(p.center_z_m)
-        self.var_rx.set(p.rot_x_deg)
-        self.var_ry.set(p.rot_y_deg)
-        self.var_rz.set(p.rot_z_deg)
-        try:
-            self.var_feed_dir.set(p.feed_direction.value)
-        except Exception:
-            self.var_feed_dir.set(FeedDirection.NEG_X.value)
-        # best-effort mapping back to enum name
-        try:
-            for m in Metal:
-                if metal_defaults[m] == p.params.metal:
-                    self.var_metal.set(m.value)
-                    break
-        except Exception:
-            pass
+        kind = self._current_kind or 'patch'
+        if kind == 'patch':
+            try:
+                self.horn_frame.pack_forget()
+            except Exception:
+                pass
+            try:
+                # Ensure patch props are visible
+                if getattr(self, 'patch_frame', None) is not None:
+                    self.patch_frame.pack(fill='x', padx=10, pady=(0,10))
+            except Exception:
+                pass
+            p = self.patches[self._current_index]
+            self.var_cx.set(p.center_x_m)
+            self.var_cy.set(p.center_y_m)
+            self.var_freq.set(p.params.frequency_hz/1e9)
+            self.var_eps.set(p.params.eps_r)
+            self.var_h.set(p.params.h_m*1e3)
+            self.var_loss.set(p.params.loss_tangent)
+            self.var_cz.set(p.center_z_m)
+            self.var_rx.set(p.rot_x_deg)
+            self.var_ry.set(p.rot_y_deg)
+            self.var_rz.set(p.rot_z_deg)
+            try:
+                self.var_feed_dir.set(p.feed_direction.value)
+            except Exception:
+                self.var_feed_dir.set(FeedDirection.NEG_X.value)
+            try:
+                for m in Metal:
+                    if metal_defaults[m] == p.params.metal:
+                        self.var_metal.set(m.value)
+                        break
+            except Exception:
+                pass
+            try:
+                self.var_metal_t_um.set(float(p.params.metal.thickness_m) * 1e6)
+            except Exception:
+                pass
+        else:
+            # Show horn frame and populate horn vars
+            try:
+                self.horn_frame.pack(fill='x', padx=10, pady=(0, 10))
+            except Exception:
+                pass
+            try:
+                if getattr(self, 'patch_frame', None) is not None:
+                    self.patch_frame.pack_forget()
+            except Exception:
+                pass
+            h = self.horns[self._current_index]
+            self.var_cx.set(h.center_x_m)
+            self.var_cy.set(h.center_y_m)
+            self.var_cz.set(h.center_z_m)
+            self.var_rx.set(h.rot_x_deg)
+            self.var_ry.set(h.rot_y_deg)
+            self.var_rz.set(h.rot_z_deg)
+            self.hvar_freq.set(h.params.frequency_hz/1e9)
+            self.hvar_throat_a.set(h.params.throat_a_m*1e3)
+            self.hvar_throat_b.set(h.params.throat_b_m*1e3)
+            self.hvar_ap_A.set(h.params.aperture_A_m*1e3)
+            self.hvar_ap_B.set(h.params.aperture_B_m*1e3)
+            self.hvar_len.set(h.params.length_m*1e3)
+            try:
+                for m in Metal:
+                    if metal_defaults[m] == h.params.metal:
+                        self.hvar_metal.set(m.value)
+                        break
+            except Exception:
+                pass
 
     def _on_apply_changes(self):
         if self._current_index is None:
@@ -857,19 +1229,40 @@ class MultiPatchPanel(ttk.Frame):
                        rx=p.rot_x_deg, ry=p.rot_y_deg, rz=p.rot_z_deg,
                        freq=p.params.frequency_hz/1e9, eps=p.params.eps_r,
                        h=p.params.h_m*1e3, loss=p.params.loss_tangent,
-                       metal=str(self.var_metal.get()))
+                       metal=str(self.var_metal.get()),
+                       metal_t_um=float(getattr(p.params.metal, 'thickness_m', 35e-6)) * 1e6)
             p.center_x_m = float(self.var_cx.get())
             p.center_y_m = float(self.var_cy.get())
             p.center_z_m = float(self.var_cz.get())
             p.rot_x_deg = float(self.var_rx.get())
             p.rot_y_deg = float(self.var_ry.get())
             p.rot_z_deg = float(self.var_rz.get())
+            # Apply selected metal and thickness
+            try:
+                t_um = float(self.var_metal_t_um.get())
+            except Exception:
+                t_um = None
+            if t_um is not None:
+                t_m = max(1e-7, t_um * 1e-6)
+                try:
+                    # Update in-place to preserve other metal properties
+                    p.params.metal.thickness_m = t_m
+                except Exception:
+                    # Fallback: rebuild params with copied metal
+                    try:
+                        m_enum = Metal(self.var_metal.get())
+                    except Exception:
+                        m_enum = Metal.COPPER
+                    mprops = metal_defaults[m_enum].model_copy(deep=True)
+                    mprops.thickness_m = t_m
+                    p.params = self._rebuild_params(p, metal=mprops)
             p.params = PatchAntennaParams(
                 frequency_hz=float(self.var_freq.get())*1e9,
                 eps_r=float(self.var_eps.get()),
                 h_m=float(self.var_h.get())*1e-3,
                 loss_tangent=float(self.var_loss.get()),
-                metal=metal_defaults[metal_enum],
+                # Preserve any thickness override applied above or existing in p.params.metal
+                metal=p.params.metal,
                 patch_length_m=None,
                 patch_width_m=None,
             )
@@ -878,11 +1271,12 @@ class MultiPatchPanel(ttk.Frame):
                        rx=p.rot_x_deg, ry=p.rot_y_deg, rz=p.rot_z_deg,
                        freq=p.params.frequency_hz/1e9, eps=p.params.eps_r,
                        h=p.params.h_m*1e3, loss=p.params.loss_tangent,
-                       metal=str(self.var_metal.get()))
+                       metal=str(self.var_metal.get()),
+                       metal_t_um=float(self.var_metal_t_um.get()))
             key_labels = {
                 'cx': 'Cx (m)', 'cy': 'Cy (m)', 'cz': 'Cz (m)',
                 'rx': 'Rx (°)', 'ry': 'Ry (°)', 'rz': 'Rz (°)',
-                'freq': 'Frequency (GHz)', 'eps': 'εr', 'h': 'h (mm)', 'loss': 'loss tan', 'metal': 'metal'
+                'freq': 'Frequency (GHz)', 'eps': 'εr', 'h': 'h (mm)', 'loss': 'loss tan', 'metal': 'metal', 'metal_t_um': 'metal t (µm)'
             }
             for k in new:
                 try:
@@ -910,16 +1304,16 @@ class MultiPatchPanel(ttk.Frame):
             try:
                 # Combobox text -> int (first char)
                 sel = self.mesh_combo.get().strip()
-                mq = int(sel.split('-',1)[0].strip()) if sel else 3
+                mq = int(sel.split('-',1)[0].strip()) if sel else 4
                 if self._prev_mesh_quality is None or mq != self._prev_mesh_quality:
-                    label_map = {1:"coarse",2:"medium-",3:"medium",4:"medium+",5:"fine"}
-                    changes.append(f"mesh = {label_map.get(mq, 'medium')} ({mq}/5)")
+                    label_map = {1:"coarse",2:"medium-",3:"medium",4:"medium+",5:"fine",6:"fine+",7:"very fine",8:"ultra fine",9:"extreme",10:"max"}
+                    changes.append(f"mesh = {label_map.get(mq, 'medium')} ({mq}/10)")
                 self._prev_mesh_quality = mq
             except Exception:
                 pass
             # NF2FF center diff
             try:
-                nf_now = self.nf_center_combo.get().strip() or 'Origin'
+                nf_now = self.nf_center_combo.get().strip() or 'Centroid'
                 if nf_now != self._prev_nf_center:
                     changes.append(f"NF2FF center = {nf_now}")
                 self._prev_nf_center = nf_now
@@ -931,12 +1325,10 @@ class MultiPatchPanel(ttk.Frame):
                 if mode_now != self._prev_simbox_mode:
                     changes.append(f"SimBox mode = {mode_now}")
                 self._prev_simbox_mode = mode_now
-                # Margins
                 mx, my, mz = float(self.var_margin_x.get()), float(self.var_margin_y.get()), float(self.var_margin_z.get())
                 if abs(mx - self._prev_margin_x) > 1e-9 or abs(my - self._prev_margin_y) > 1e-9 or abs(mz - self._prev_margin_z) > 1e-9:
                     changes.append(f"Auto margins = ({mx:g},{my:g},{mz:g}) mm")
                 self._prev_margin_x, self._prev_margin_y, self._prev_margin_z = mx, my, mz
-                # Manual sizes
                 bx, by, bz = float(self.var_box_x.get()), float(self.var_box_y.get()), float(self.var_box_z.get())
                 if abs(bx - self._prev_box_x) > 1e-9 or abs(by - self._prev_box_y) > 1e-9 or abs(bz - self._prev_box_z) > 1e-9:
                     changes.append(f"Manual box = ({bx:g},{by:g},{bz:g}) mm")
@@ -981,19 +1373,35 @@ class MultiPatchPanel(ttk.Frame):
             # mesh
             try:
                 sel = self.mesh_combo.get().strip()
-                mq = int(sel.split('-',1)[0].strip()) if sel else 3
+                mq = int(sel.split('-',1)[0].strip()) if sel else 4
                 if self._prev_mesh_quality is None or mq != self._prev_mesh_quality:
-                    label_map = {1:"coarse",2:"medium-",3:"medium",4:"medium+",5:"fine"}
-                    changes.append(f"mesh = {label_map.get(mq, 'medium')} ({mq}/5)")
+                    label_map = {1:"coarse",2:"medium-",3:"medium",4:"medium+",5:"fine",6:"fine+",7:"very fine",8:"ultra fine",9:"extreme",10:"max"}
+                    changes.append(f"mesh = {label_map.get(mq, 'medium')} ({mq}/10)")
                 self._prev_mesh_quality = mq
             except Exception:
                 pass
             # NF2FF center
             try:
-                nf_now = self.nf_center_combo.get().strip() or 'Origin'
+                nf_now = self.nf_center_combo.get().strip() or 'Centroid'
                 if nf_now != self._prev_nf_center:
                     changes.append(f"NF2FF center = {nf_now}")
                 self._prev_nf_center = nf_now
+            except Exception:
+                pass
+            # Boundary condition
+            try:
+                bc_now = (self.boundary_combo.get().strip() if getattr(self, 'boundary_combo', None) else 'PML_8')
+                if bc_now != self._prev_boundary:
+                    changes.append(f"boundary = {bc_now}")
+                self._prev_boundary = bc_now
+            except Exception:
+                pass
+            # End Criteria (dB)
+            try:
+                end_db_now = float(self.var_end_criteria_db.get())
+                if self._prev_end_criteria_db is None or abs(end_db_now - self._prev_end_criteria_db) > 1e-12:
+                    changes.append(f"end criteria = {end_db_now:g} dB")
+                self._prev_end_criteria_db = end_db_now
             except Exception:
                 pass
             # Sim box
@@ -1042,35 +1450,98 @@ class MultiPatchPanel(ttk.Frame):
         if self._current_index is None:
             return
         try:
-            p = self.patches[self._current_index]
-            if field == 'cx':
-                p.center_x_m = float(self.var_cx.get())
-            elif field == 'cy':
-                p.center_y_m = float(self.var_cy.get())
-            elif field == 'cz':
-                p.center_z_m = float(self.var_cz.get())
-            elif field == 'rx':
-                p.rot_x_deg = float(self.var_rx.get())
-            elif field == 'ry':
-                p.rot_y_deg = float(self.var_ry.get())
-            elif field == 'rz':
-                p.rot_z_deg = float(self.var_rz.get())
-            elif field == 'feed_dir':
-                try:
-                    p.feed_direction = FeedDirection(self.var_feed_dir.get())
-                except Exception:
+            if (self._current_kind or 'patch') == 'patch':
+                p = self.patches[self._current_index]
+                if field == 'cx':
+                    p.center_x_m = float(self.var_cx.get())
+                elif field == 'cy':
+                    p.center_y_m = float(self.var_cy.get())
+                elif field == 'cz':
+                    p.center_z_m = float(self.var_cz.get())
+                elif field == 'rx':
+                    p.rot_x_deg = float(self.var_rx.get())
+                elif field == 'ry':
+                    p.rot_y_deg = float(self.var_ry.get())
+                elif field == 'rz':
+                    p.rot_z_deg = float(self.var_rz.get())
+                elif field == 'feed_dir':
+                    try:
+                        p.feed_direction = FeedDirection(self.var_feed_dir.get())
+                    except Exception:
+                        p.feed_direction = FeedDirection.NEG_X
+                elif field == 'freq':
+                    p.params = self._rebuild_params(p, frequency_hz=float(self.var_freq.get())*1e9)
+                elif field == 'eps':
+                    p.params = self._rebuild_params(p, eps_r=float(self.var_eps.get()))
+                elif field == 'h':
+                    p.params = self._rebuild_params(p, h_m=float(self.var_h.get())*1e-3)
+                elif field == 'loss':
+                    p.params = self._rebuild_params(p, loss_tangent=float(self.var_loss.get()))
+                elif field == 'metal':
+                    # Change base metal but preserve current thickness entry
+                    try:
+                        t_um = float(self.var_metal_t_um.get())
+                    except Exception:
+                        t_um = None
+                    try:
+                        metal_enum = Metal(self.var_metal.get())
+                    except Exception:
+                        metal_enum = Metal.COPPER
+                    mprops = metal_defaults[metal_enum].model_copy(deep=True)
+                    if t_um is not None:
+                        mprops.thickness_m = max(1e-7, t_um * 1e-6)
+                    p.params = self._rebuild_params(p, metal=mprops)
+                elif field == 'metal_thickness':
+                    try:
+                        t_um = float(self.var_metal_t_um.get())
+                    except Exception:
+                        t_um = None
+                    if t_um is not None:
+                        t_m = max(1e-7, t_um * 1e-6)
+                        try:
+                            # Update in-place to preserve other metal properties
+                            p.params.metal.thickness_m = t_m
+                        except Exception:
+                            # Fallback: rebuild params with copied metal
+                            try:
+                                m_enum = Metal(self.var_metal.get())
+                            except Exception:
+                                m_enum = Metal.COPPER
+                            mprops = metal_defaults[m_enum].model_copy(deep=True)
+                            mprops.thickness_m = t_m
+                            p.params = self._rebuild_params(p, metal=mprops)
+                else:
                     pass
-            elif field == 'freq':
-                p.params = self._rebuild_params(p, frequency_hz=float(self.var_freq.get())*1e9)
-            elif field == 'eps':
-                p.params = self._rebuild_params(p, eps_r=float(self.var_eps.get()))
-            elif field == 'h':
-                p.params = self._rebuild_params(p, h_m=float(self.var_h.get())*1e-3)
-            elif field == 'loss':
-                p.params = self._rebuild_params(p, loss_tangent=float(self.var_loss.get()))
-            elif field == 'metal':
-                metal_enum = Metal(self.var_metal.get())
-                p.params = self._rebuild_params(p, metal=metal_defaults[metal_enum])
+            else:
+                # horn fields
+                h = self.horns[self._current_index]
+                if field == 'cx':
+                    h.center_x_m = float(self.var_cx.get())
+                elif field == 'cy':
+                    h.center_y_m = float(self.var_cy.get())
+                elif field == 'cz':
+                    h.center_z_m = float(self.var_cz.get())
+                elif field == 'rx':
+                    h.rot_x_deg = float(self.var_rx.get())
+                elif field == 'ry':
+                    h.rot_y_deg = float(self.var_ry.get())
+                elif field == 'rz':
+                    h.rot_z_deg = float(self.var_rz.get())
+                elif field == 'h_freq':
+                    h.params.frequency_hz = float(self.hvar_freq.get())*1e9
+                elif field == 'h_throat_a':
+                    h.params.throat_a_m = float(self.hvar_throat_a.get())*1e-3
+                elif field == 'h_throat_b':
+                    h.params.throat_b_m = float(self.hvar_throat_b.get())*1e-3
+                elif field == 'h_ap_A':
+                    h.params.aperture_A_m = float(self.hvar_ap_A.get())*1e-3
+                elif field == 'h_ap_B':
+                    h.params.aperture_B_m = float(self.hvar_ap_B.get())*1e-3
+                elif field == 'h_len':
+                    h.params.length_m = float(self.hvar_len.get())*1e-3
+                elif field == 'h_metal':
+                    metal_enum = Metal(self.hvar_metal.get())
+                    h.params.metal = metal_defaults[metal_enum]
             self._draw_scene()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to set {field}: {e}")
@@ -1079,8 +1550,27 @@ class MultiPatchPanel(ttk.Frame):
         if self._current_index is None:
             return
         try:
-            self.patches.pop(self._current_index)
-            self._refresh_selector(select_index=min(self._current_index, max(0, len(self.patches)-1)))
+            removed_kind = (self._current_kind or 'patch')
+            removed_idx = int(self._current_index)
+            if removed_kind == 'patch':
+                if 0 <= removed_idx < len(self.patches):
+                    self.patches.pop(removed_idx)
+            else:
+                if 0 <= removed_idx < len(self.horns):
+                    self.horns.pop(removed_idx)
+            # Determine next selection by name
+            next_name = None
+            if removed_kind == 'patch' and self.patches:
+                next_idx = min(removed_idx, len(self.patches)-1)
+                next_name = self.patches[next_idx].name
+            elif removed_kind == 'horn' and self.horns:
+                next_idx = min(removed_idx, len(self.horns)-1)
+                next_name = self.horns[next_idx].name
+            elif self.patches:
+                next_name = self.patches[0].name
+            elif self.horns:
+                next_name = self.horns[0].name
+            self._refresh_selector(select_name=next_name)
             self._draw_scene()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to remove: {e}")

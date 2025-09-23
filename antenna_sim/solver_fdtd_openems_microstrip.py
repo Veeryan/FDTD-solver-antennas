@@ -206,7 +206,7 @@ def prepare_openems_microstrip_patch(
         air_margin = 50.0  # mm
         SimBox_X = substrate_W + 2 * air_margin
         SimBox_Y = substrate_L + 2 * air_margin
-        SimBox_Z = 100.0  # mm above and below
+        SimBox_Z = 160.0  # mm above and below (more robust against boundary reflections)
         
         if verbose:
             print(f"Patch dimensions: {patch_W:.1f} x {patch_L:.1f} mm")
@@ -304,25 +304,24 @@ def prepare_openems_microstrip_patch(
         feed_metal.AddBox(priority=10, start=feed_start, stop=feed_stop)
         FDTD.AddEdges2Grid(dirs='xy', properties=feed_metal, metal_edge_res=mesh_res/2)
         
-        # Add microstrip port (MSL port for proper impedance matching)
+        # Replace MSL port with a LumpedPort bridging patch to ground at the feed location.
+        # Determine feed point at the patch edge center along the selected axis.
         if feed_direction in [FeedDirection.NEG_X, FeedDirection.POS_X]:
-            port_width = substrate_L
+            feed_px = -patch_W/2 if feed_direction == FeedDirection.NEG_X else patch_W/2
+            feed_py = 0.0
         else:
-            port_width = substrate_W
-            
-        # Create MSL port for 50Ω microstrip line (following tutorial syntax)
-        port = FDTD.AddMSLPort(
-            1,  # port number
-            feed_metal,  # PEC metal property 
-            port_start,  # start position
-            port_stop,   # stop position
-            port_dir,    # propagation direction ('x' or 'y')
-            'z',         # height direction (substrate thickness direction)
-            excite=-1,   # excitation amplitude
-            FeedShift=10*mesh_res,  # feed shift for better convergence
-            MeasPlaneShift=feed_line_length/4,  # measurement plane shift
-            priority=5   # priority
-        )
+            feed_px = 0.0
+            feed_py = -patch_L/2 if feed_direction == FeedDirection.NEG_Y else patch_L/2
+        # Snap mesh lines at feed location and across substrate thickness
+        try:
+            mesh.AddLine('x', [float(feed_px)])
+            mesh.AddLine('y', [float(feed_py)])
+            mesh.AddLine('z', [0.0, float(h)])
+        except Exception:
+            pass
+        port_start = [float(feed_px), float(feed_py), 0.0]
+        port_stop  = [float(feed_px), float(feed_py), float(h)]
+        port = FDTD.AddLumpedPort(1, 50.0, port_start, port_stop, 'z', 1.0, priority=5, edges2grid='xy')
         
         # Add mesh lines for feed line (following MSL tutorial patterns)
         if feed_direction in [FeedDirection.NEG_X, FeedDirection.POS_X]:

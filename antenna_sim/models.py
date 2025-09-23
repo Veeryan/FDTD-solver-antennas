@@ -105,3 +105,86 @@ class PatchAntennaParams(BaseModel):
     @property
     def W_mm(self) -> Optional[float]:
         return None if self.patch_width_m is None else self.patch_width_m * 1e3
+
+
+class HornAntennaParams(BaseModel):
+    """Primary inputs for a rectangular pyramidal horn antenna.
+
+    Minimal sufficient geometric parameters:
+    - frequency_hz: Operating frequency
+    - throat_a_m: Throat (waveguide) width a (broad dimension)
+    - throat_b_m: Throat (waveguide) height b (narrow dimension)
+    - aperture_A_m: Aperture width A
+    - aperture_B_m: Aperture height B
+    - length_m: Axial horn length L (throat plane to aperture plane)
+    - metal: Conductor properties (defaults to PEC-like copper)
+
+    Notes:
+    - Polarization is implied TE10 by default (E along b). We can extend later if needed.
+    - This model is independent of the GUI placement/rotation, which is handled by scene instances.
+    """
+
+    frequency_hz: float = Field(gt=0)
+    throat_a_m: float = Field(gt=0, description="Throat width a (m), broad dimension")
+    throat_b_m: float = Field(gt=0, description="Throat height b (m), narrow dimension")
+    aperture_A_m: float = Field(gt=0, description="Aperture width A (m)")
+    aperture_B_m: float = Field(gt=0, description="Aperture height B (m)")
+    length_m: float = Field(gt=0, description="Horn axial length L (m)")
+    metal: MetalProperties = Field(default_factory=lambda: metal_defaults[Metal.COPPER])
+
+    @classmethod
+    def from_user_units(
+        cls,
+        *,
+        frequency_ghz: float,
+        throat_a_mm: float,
+        throat_b_mm: float,
+        aperture_A_mm: float,
+        aperture_B_mm: float,
+        length_mm: float,
+        metal: str = "copper",
+    ) -> "HornAntennaParams":
+        frequency_hz = frequency_ghz * 1e9
+        a_m = throat_a_mm * 1e-3
+        b_m = throat_b_mm * 1e-3
+        A_m = aperture_A_mm * 1e-3
+        B_m = aperture_B_mm * 1e-3
+        L_m = length_mm * 1e-3
+        try:
+            metal_enum = Metal(metal.lower())
+        except Exception:
+            metal_enum = Metal.COPPER
+        metal_props = metal_defaults[metal_enum].model_copy(deep=True)
+        return cls(
+            frequency_hz=frequency_hz,
+            throat_a_m=a_m,
+            throat_b_m=b_m,
+            aperture_A_m=A_m,
+            aperture_B_m=B_m,
+            length_m=L_m,
+            metal=metal_props,
+        )
+
+    @property
+    def frequency_ghz(self) -> float:
+        return self.frequency_hz / 1e9
+
+    @property
+    def throat_a_mm(self) -> float:
+        return self.throat_a_m * 1e3
+
+    @property
+    def throat_b_mm(self) -> float:
+        return self.throat_b_m * 1e3
+
+    @property
+    def aperture_A_mm(self) -> float:
+        return self.aperture_A_m * 1e3
+
+    @property
+    def aperture_B_mm(self) -> float:
+        return self.aperture_B_m * 1e3
+
+    @property
+    def length_mm(self) -> float:
+        return self.length_m * 1e3
